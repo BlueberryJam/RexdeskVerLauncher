@@ -1,0 +1,23 @@
+# Local version-manager data (MSIs, installs, catalogs with absolute paths)
+library/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+.env
+
+# PyInstaller / local builds
+build/
+dist/
+*.spec.bak
+
+# Logs / IDE
+debug*.log
+.cursor/
+
+# Packaged app at repo root (use GitHub Releases for binaries)
+/Rexdesk Version Manager.exe
