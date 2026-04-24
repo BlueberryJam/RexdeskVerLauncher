@@ -1,0 +1,48 @@
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+template: |
+  ## What's Changed
+
+  $CHANGES
+
+  ## Installation
+
+  Download and run `Rexdesk-Version-Manager-Setup.exe` from this release.
+
+categories:
+  - title: "Features"
+    labels:
+      - "feature"
+      - "enhancement"
+  - title: "Fixes"
+    labels:
+      - "fix"
+      - "bug"
+  - title: "Maintenance"
+    labels:
+      - "chore"
+      - "docs"
+      - "refactor"
+      - "ci"
+
+change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
+change-title-escapes: '\<*_&'
+no-changes-template: "- No user-facing changes in this release."
+
+version-resolver:
+  major:
+    labels:
+      - "major"
+  minor:
+    labels:
+      - "feature"
+      - "enhancement"
+  patch:
+    labels:
+      - "fix"
+      - "bug"
+      - "chore"
+      - "docs"
+      - "refactor"
+      - "ci"
+  default: patch
