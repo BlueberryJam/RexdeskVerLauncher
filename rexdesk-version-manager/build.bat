@@ -5,7 +5,7 @@ cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" (
     echo Creating virtual environment...
     python -m venv .venv
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo Failed to create virtual environment.
         pause
         exit /b 1
@@ -19,7 +19,7 @@ if %errorlevel% neq 0 (
     rem  pip install in the venv. pip's own recommended workaround is to
     rem  reinstall ignoring the existing on-disk install.
     ".venv\Scripts\python.exe" -m pip install --upgrade --ignore-installed --no-deps pip >nul 2>&1
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo Could not upgrade pip; continuing with the bundled version.
     )
 )

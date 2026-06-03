@@ -315,15 +315,39 @@ def shelter_install_dirs(
     return moved
 
 
-def unshelter_install_dirs(moved: list[tuple[Path, Path]]) -> None:
-    """Restore previously sheltered install directories."""
+def unshelter_install_dirs(moved: list[tuple[Path, Path]]) -> list[tuple[Path, Path]]:
+    """Restore previously sheltered install directories.
+
+    Returns the list of (install_dir, backup_dir) pairs that could NOT be
+    restored due to an OSError (e.g. locked file).  Callers should warn the
+    user about any non-empty result so they can recover the backup manually.
+    """
+    failed: list[tuple[Path, Path]] = []
     for install_dir, backup_dir in moved:
         if not backup_dir.exists():
             continue
-        if install_dir.exists():
-            shutil.rmtree(install_dir)
-        install_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(backup_dir), str(install_dir))
+        # Rename the existing install_dir to a temp name first so it can be
+        # restored if shutil.move fails — avoids deleting the live copy before
+        # we know the restore will succeed.
+        temp_dir: Path | None = None
+        try:
+            if install_dir.exists():
+                temp_dir = install_dir.with_name(install_dir.name + "_old")
+                install_dir.rename(temp_dir)
+            install_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(backup_dir), str(install_dir))
+            if temp_dir and temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        except OSError:
+            # Restore the original install_dir from temp so the user isn't
+            # left with neither copy available.
+            if temp_dir and temp_dir.exists() and not install_dir.exists():
+                try:
+                    temp_dir.rename(install_dir)
+                except OSError:
+                    pass
+            failed.append((install_dir, backup_dir))
+    return failed
 
 
 def install_with_msiexec(

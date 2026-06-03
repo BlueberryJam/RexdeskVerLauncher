@@ -33,8 +33,9 @@ class CatalogStore:
 
         raw = json.loads(self.catalog_path.read_text(encoding="utf-8"))
         records = {}
+        known = VersionRecord.__dataclass_fields__
         for key, value in raw.get("versions", {}).items():
-            records[key] = VersionRecord(**value)
+            records[key] = VersionRecord(**{k: v for k, v in value.items() if k in known})
         self._records = records
 
     def save(self) -> None:

@@ -42,6 +42,14 @@ SELECT_BG = "#094771"
 EDITOR_BG = "#1e1e1e"
 
 
+def _norm_version(v: str) -> str:
+    """Strip trailing .0 components so '1.2.3.0' == '1.2.3'."""
+    parts = v.split(".")
+    while len(parts) > 1 and parts[-1] == "0":
+        parts.pop()
+    return ".".join(parts)
+
+
 MSI_ICON_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAJlJREFUWIXt"
     "ljEOgCAQRIf4/y/jCVhYWEisBRYaC42FBQkJCy7DLGR3k0koxZ/MzAIAAAAAAA"
@@ -86,11 +94,31 @@ class RexdeskVersionManager(BaseTk):
         self._autosave_date_id: str | None = None
         self._loading_notes = False
 
+        self._set_window_icon()
         self._apply_theme()
         self._build_ui()
         self._refresh_list()
         self._setup_drag_drop()
         self._check_live_version()
+
+    def _set_window_icon(self) -> None:
+        ico = assets_dir() / "app-icon.ico"
+        if ico.is_file():
+            try:
+                self.iconbitmap(default=str(ico))
+            except Exception:
+                pass
+        try:
+            from PIL import Image, ImageTk
+            png = assets_dir() / "app-icon.png"
+            if png.is_file():
+                img = Image.open(png).convert("RGBA")
+                self._icon_photo_16 = ImageTk.PhotoImage(img.resize((16, 16), Image.Resampling.LANCZOS))
+                self._icon_photo_32 = ImageTk.PhotoImage(img.resize((32, 32), Image.Resampling.LANCZOS))
+                self._icon_photo_256 = ImageTk.PhotoImage(img)
+                self.iconphoto(True, self._icon_photo_256, self._icon_photo_32, self._icon_photo_16)
+        except Exception:
+            pass
 
     def _apply_theme(self) -> None:
         style = ttk.Style(self)
@@ -362,6 +390,7 @@ class RexdeskVersionManager(BaseTk):
     def _select_product(self, new_key: str) -> None:
         if new_key == self.current_product_key:
             return
+        self._flush_pending_autosaves()
         self.current_product_key = new_key
         self.product_def = PRODUCTS[new_key]
         self._product_var.set(self.product_def.display_name)
@@ -545,11 +574,30 @@ class RexdeskVersionManager(BaseTk):
 
     # ------------------------------------------------------------------ list
     def _prune_missing_msi(self) -> None:
-        """Remove catalog entries whose MSI file has been deleted from disk."""
-        to_remove = [
-            r.version for r in self.catalog.all_versions()
-            if r.msi_path and not Path(r.msi_path).exists()
-        ]
+        """Remove catalog entries whose MSI file has been deleted from disk.
+
+        Skips pruning entirely when the managed MSI store directory is
+        unreachable (e.g. the library is on a network drive that is temporarily
+        offline) — in that case Path.exists() returns False for every entry and
+        we would silently wipe the whole catalog.
+        """
+        try:
+            if not self.paths.msi_dir.exists():
+                return
+        except OSError:
+            return
+
+        to_remove = []
+        for r in self.catalog.all_versions():
+            if not r.msi_path:
+                continue
+            try:
+                if not Path(r.msi_path).exists():
+                    to_remove.append(r.version)
+            except OSError:
+                # Can't determine reachability — leave the entry alone.
+                pass
+
         for version in to_remove:
             if self.selected_version == version:
                 self.selected_version = None
@@ -560,13 +608,21 @@ class RexdeskVersionManager(BaseTk):
         """Reset status to not_installed when the install folder is gone *or*
         when it still exists on disk but no longer contains an executable
         (e.g. a previous buggy uninstall wiped its contents)."""
+        try:
+            if not self.paths.installs_dir.exists():
+                return
+        except OSError:
+            return
         for record in self.catalog.all_versions():
             if record.status != "installed":
                 continue
             if not record.install_path:
                 continue
             install_dir = Path(record.install_path)
-            files_present = install_dir.exists() and self._guess_executable(install_dir) is not None
+            try:
+                files_present = install_dir.exists() and self._guess_executable(install_dir) is not None
+            except OSError:
+                continue
             if files_present:
                 continue
             updated = replace(record, status="not_installed",
@@ -592,11 +648,10 @@ class RexdeskVersionManager(BaseTk):
             self.catalog.upsert(updated)
 
     def _is_live_version(self, version: str) -> bool:
-        """Check whether *version* matches the live website version."""
         live = self._live_website_version
         if not live:
             return False
-        return version == live or version.startswith(live) or live.startswith(version)
+        return _norm_version(version) == _norm_version(live)
 
     def _refresh_list(self) -> None:
         self._recover_catalog_from_disk()
@@ -667,6 +722,7 @@ class RexdeskVersionManager(BaseTk):
 
     # ------------------------------------------------------------------ selection
     def _on_select_version(self, _event: object) -> None:
+        self._flush_pending_autosaves()
         if self._selected_list_idx is None or self._selected_list_idx >= len(self._version_order):
             self.selected_version = None
             self._show_detail(False)
@@ -690,20 +746,22 @@ class RexdeskVersionManager(BaseTk):
         self.status_badge.configure(text=f"({status_text})")
 
         self._loading_notes = True
-        self._release_date_var.set(record.release_date or "")
+        try:
+            self._release_date_var.set(record.release_date or "")
 
-        self.patch_notes_editor.delete("1.0", tk.END)
-        notes_path = Path(record.notes_path) if record.notes_path else None
-        if notes_path and notes_path.exists():
-            self.patch_notes_editor.insert("1.0", notes_path.read_text(encoding="utf-8"))
-        self.patch_notes_editor.edit_modified(False)
+            self.patch_notes_editor.delete("1.0", tk.END)
+            notes_path = Path(record.notes_path) if record.notes_path else None
+            if notes_path and notes_path.exists():
+                self.patch_notes_editor.insert("1.0", notes_path.read_text(encoding="utf-8"))
+            self.patch_notes_editor.edit_modified(False)
 
-        self.bug_notes_editor.delete("1.0", tk.END)
-        bug_path = Path(record.bug_notes_path) if record.bug_notes_path else None
-        if bug_path and bug_path.exists():
-            self.bug_notes_editor.insert("1.0", bug_path.read_text(encoding="utf-8"))
-        self.bug_notes_editor.edit_modified(False)
-        self._loading_notes = False
+            self.bug_notes_editor.delete("1.0", tk.END)
+            bug_path = Path(record.bug_notes_path) if record.bug_notes_path else None
+            if bug_path and bug_path.exists():
+                self.bug_notes_editor.insert("1.0", bug_path.read_text(encoding="utf-8"))
+            self.bug_notes_editor.edit_modified(False)
+        finally:
+            self._loading_notes = False
 
         self._update_action_buttons(record)
         self._set_status(f"Selected {record.version}")
@@ -804,89 +862,202 @@ class RexdeskVersionManager(BaseTk):
         if not self._loading_notes:
             self._schedule_autosave_date()
 
+    def _flush_pending_autosaves(self) -> None:
+        if self._autosave_patch_id is not None:
+            self.after_cancel(self._autosave_patch_id)
+            self._save_patch_notes(quiet=True)
+        if self._autosave_bug_id is not None:
+            self.after_cancel(self._autosave_bug_id)
+            self._save_bug_notes(quiet=True)
+        if self._autosave_date_id is not None:
+            self.after_cancel(self._autosave_date_id)
+            self._save_release_date()
+
     def _schedule_autosave_patch(self) -> None:
         if self._autosave_patch_id is not None:
             self.after_cancel(self._autosave_patch_id)
-        self._autosave_patch_id = self.after(500, lambda: self._save_patch_notes(quiet=True))
-
-    def _schedule_autosave_bug(self) -> None:
-        if self._autosave_bug_id is not None:
-            self.after_cancel(self._autosave_bug_id)
-        self._autosave_bug_id = self.after(500, lambda: self._save_bug_notes(quiet=True))
-
-    def _schedule_autosave_date(self) -> None:
-        if self._autosave_date_id is not None:
-            self.after_cancel(self._autosave_date_id)
-        self._autosave_date_id = self.after(500, self._save_release_date)
-
-    def _save_release_date(self) -> None:
-        self._autosave_date_id = None
+            self._autosave_patch_id = None
         if not self.selected_version:
             return
         record = self.catalog.get(self.selected_version)
         if not record:
             return
-        new_date = self._release_date_var.get().strip()
-        if new_date != (record.release_date or ""):
-            updated = replace(record, release_date=new_date)
-            self.catalog.upsert(updated)
-            self._set_status(f"Auto-saved release date for {record.version}")
+        catalog = self.catalog
+        fallback_notes_dir = self.paths.patch_notes_dir
+        text = self.patch_notes_editor.get("1.0", tk.END).rstrip()
+        self._autosave_patch_id = self.after(
+            500,
+            lambda: self._save_patch_notes(
+                quiet=True,
+                catalog=catalog,
+                version=record.version,
+                fallback_notes_dir=fallback_notes_dir,
+                text=text,
+            ),
+        )
 
-    # ------------------------------------------------------------------ save notes
-    def _save_patch_notes(self, *, quiet: bool = False) -> None:
-        self._autosave_patch_id = None
-        if quiet:
+    def _schedule_autosave_bug(self) -> None:
+        if self._autosave_bug_id is not None:
+            self.after_cancel(self._autosave_bug_id)
+            self._autosave_bug_id = None
+        if not self.selected_version:
+            return
+        record = self.catalog.get(self.selected_version)
+        if not record:
+            return
+        catalog = self.catalog
+        bug_notes_dir = self.paths.bug_notes_dir
+        text = self.bug_notes_editor.get("1.0", tk.END).rstrip()
+        self._autosave_bug_id = self.after(
+            500,
+            lambda: self._save_bug_notes(
+                quiet=True,
+                catalog=catalog,
+                version=record.version,
+                bug_notes_dir=bug_notes_dir,
+                text=text,
+            ),
+        )
+
+    def _schedule_autosave_date(self) -> None:
+        if self._autosave_date_id is not None:
+            self.after_cancel(self._autosave_date_id)
+            self._autosave_date_id = None
+        if not self.selected_version:
+            return
+        record = self.catalog.get(self.selected_version)
+        if not record:
+            return
+        catalog = self.catalog
+        release_date = self._release_date_var.get().strip()
+        self._autosave_date_id = self.after(
+            500,
+            lambda: self._save_release_date(
+                catalog=catalog,
+                version=record.version,
+                release_date=release_date,
+            ),
+        )
+
+    def _save_release_date(
+        self,
+        *,
+        catalog: "CatalogStore | None" = None,
+        version: str | None = None,
+        release_date: str | None = None,
+    ) -> None:
+        self._autosave_date_id = None
+        if catalog is None:
+            catalog = self.catalog
+        if version is None:
             if not self.selected_version:
                 return
-            record = self.catalog.get(self.selected_version)
+            version = self.selected_version
+        record = catalog.get(version)
+        if not record:
+            return
+        new_date = release_date if release_date is not None else self._release_date_var.get().strip()
+        if new_date != (record.release_date or ""):
+            updated = replace(record, release_date=new_date)
+            catalog.upsert(updated)
+            if catalog is self.catalog and record.version == self.selected_version:
+                self._set_status(f"Auto-saved release date for {record.version}")
+
+    # ------------------------------------------------------------------ save notes
+    def _save_patch_notes(
+        self,
+        *,
+        quiet: bool = False,
+        catalog: "CatalogStore | None" = None,
+        version: str | None = None,
+        fallback_notes_dir: Path | None = None,
+        text: str | None = None,
+    ) -> None:
+        if not quiet and self._autosave_patch_id is not None:
+            self.after_cancel(self._autosave_patch_id)
+        self._autosave_patch_id = None
+        if catalog is None:
+            catalog = self.catalog
+        if version is not None:
+            record = catalog.get(version)
             if not record:
                 return
+        elif quiet:
+            if not self.selected_version:
+                return
+            record = catalog.get(self.selected_version)
+            if not record:
+                return
+            version = record.version
         else:
             record = self._get_selected_record()
             if not record:
                 return
+            version = record.version
         notes_path = Path(record.notes_path) if record.notes_path else None
         if not notes_path:
             msi_path = Path(record.msi_path) if record.msi_path else None
             if msi_path and msi_path.exists():
                 notes_path = msi_ops.ensure_patch_notes_file_beside_msi(msi_path)
             else:
+                if fallback_notes_dir is None:
+                    fallback_notes_dir = self.paths.patch_notes_dir
                 notes_path = msi_ops.ensure_patch_notes_file(
-                    self.paths.patch_notes_dir, record.version)
+                    fallback_notes_dir, record.version)
             record = replace(record, notes_path=str(notes_path))
 
-        text = self.patch_notes_editor.get("1.0", tk.END).rstrip()
-        notes_path.write_text(f"{text}\n" if text else "", encoding="utf-8")
-        self.catalog.upsert(record)
-        if quiet:
+        body = text if text is not None else self.patch_notes_editor.get("1.0", tk.END).rstrip()
+        notes_path.write_text(f"{body}\n" if body else "", encoding="utf-8")
+        catalog.upsert(record)
+        if quiet and catalog is self.catalog and version == self.selected_version:
             self._set_status(f"Auto-saved patch notes for {record.version}")
-        else:
+        elif not quiet:
             self._set_status(f"Saved patch notes for {record.version}")
 
-    def _save_bug_notes(self, *, quiet: bool = False) -> None:
+    def _save_bug_notes(
+        self,
+        *,
+        quiet: bool = False,
+        catalog: "CatalogStore | None" = None,
+        version: str | None = None,
+        bug_notes_dir: Path | None = None,
+        text: str | None = None,
+    ) -> None:
+        if not quiet and self._autosave_bug_id is not None:
+            self.after_cancel(self._autosave_bug_id)
         self._autosave_bug_id = None
-        if quiet:
-            if not self.selected_version:
-                return
-            record = self.catalog.get(self.selected_version)
+        if catalog is None:
+            catalog = self.catalog
+        if version is not None:
+            record = catalog.get(version)
             if not record:
                 return
+        elif quiet:
+            if not self.selected_version:
+                return
+            record = catalog.get(self.selected_version)
+            if not record:
+                return
+            version = record.version
         else:
             record = self._get_selected_record()
             if not record:
                 return
+            version = record.version
         bug_path = Path(record.bug_notes_path) if record.bug_notes_path else None
         if not bug_path:
+            if bug_notes_dir is None:
+                bug_notes_dir = self.paths.bug_notes_dir
             bug_path = msi_ops.ensure_bug_notes_file(
-                self.paths.bug_notes_dir, record.version)
+                bug_notes_dir, record.version)
             record = replace(record, bug_notes_path=str(bug_path))
 
-        text = self.bug_notes_editor.get("1.0", tk.END).rstrip()
-        bug_path.write_text(f"{text}\n" if text else "", encoding="utf-8")
-        self.catalog.upsert(record)
-        if quiet:
+        body = text if text is not None else self.bug_notes_editor.get("1.0", tk.END).rstrip()
+        bug_path.write_text(f"{body}\n" if body else "", encoding="utf-8")
+        catalog.upsert(record)
+        if quiet and catalog is self.catalog and version == self.selected_version:
             self._set_status(f"Auto-saved bugs & notes for {record.version}")
-        else:
+        elif not quiet:
             self._set_status(f"Saved bugs & notes for {record.version}")
 
     def _upload_patch_notes(self) -> None:
@@ -950,17 +1121,21 @@ class RexdeskVersionManager(BaseTk):
         self._set_status(f"Exported MSI to {exported}")
 
     # ------------------------------------------------------------------ install/launch
-    def _guess_executable(self, install_dir: Path) -> Path | None:
+    @staticmethod
+    def _guess_executable_for_hint(install_dir: Path, exe_hint: str) -> Path | None:
         if not install_dir.exists():
             return None
         candidates = list(install_dir.rglob("*.exe"))
         if not candidates:
             return None
-        hint = self.product_def.exe_hint.lower()
+        hint = exe_hint.lower()
         return sorted(
             candidates,
             key=lambda p: ((hint not in p.name.lower()), len(p.parts), p.name.lower()),
         )[0]
+
+    def _guess_executable(self, install_dir: Path) -> Path | None:
+        return self._guess_executable_for_hint(install_dir, self.product_def.exe_hint)
 
     def _collect_shelter_targets(self, exclude_version: str) -> list[tuple[Path, Path]]:
         """Build (install_dir, backup_dir) pairs for every *other* version that
@@ -992,6 +1167,11 @@ class RexdeskVersionManager(BaseTk):
         shelter_targets = self._collect_shelter_targets(record.version)
 
         registered_product_code = msi_ops.find_registered_product_code(msi_path)
+        # Capture now so a mid-install product switch doesn't write to the wrong catalog.
+        _catalog = self.catalog
+        _paths = self.paths
+        _product_key = self.current_product_key
+        _exe_hint = self.product_def.exe_hint
 
         self._set_status(f"Installing {record.version}…  (do not close)")
         self.update_idletasks()
@@ -1003,17 +1183,20 @@ class RexdeskVersionManager(BaseTk):
                 sheltered = msi_ops.shelter_install_dirs(shelter_targets)
 
                 if registered_product_code:
-                    unreg_log = self.paths.product_root / f"uninstall_prev.log"
+                    unreg_log = _paths.product_root / f"uninstall_prev.log"
                     unreg_result = msi_ops.uninstall_product_code(registered_product_code, unreg_log)
                     if unreg_result.returncode not in (0, 1605):
-                        self.after(0, lambda: (
-                            self._set_status("Install failed: could not unregister current version"),
+                        _rc = unreg_result.returncode
+                        self.after(0, lambda rc=_rc: (
                             messagebox.showwarning(
                                 APP_NAME,
                                 f"Could not uninstall currently registered product "
-                                f"(exit {unreg_result.returncode}).\n"
+                                f"(exit {rc}).\n"
                                 f"Log: {unreg_log}",
                             ),
+                            self._set_status(f"Install failed (could not unregister, exit {rc})"),
+                            self._refresh_list(),
+                            self._on_select_version(None),
                         ))
                         return
 
@@ -1023,35 +1206,63 @@ class RexdeskVersionManager(BaseTk):
                 self.after(0, lambda e=exc: (
                     self._set_status("Install error"),
                     messagebox.showerror(APP_NAME, f"Install error:\n{e}"),
+                    self._refresh_list(),
+                    self._on_select_version(None),
                 ))
             finally:
-                msi_ops.unshelter_install_dirs(sheltered)
+                failed_restores = msi_ops.unshelter_install_dirs(sheltered)
+                if failed_restores:
+                    _fb = [str(b) for _, b in failed_restores]
+                    self.after(0, lambda fb=_fb: messagebox.showwarning(
+                        APP_NAME,
+                        f"Could not restore {len(fb)} sheltered version(s) to their "
+                        f"original location.\nBackup location(s): {', '.join(fb)}"
+                    ))
 
             if install_rc is not None:
-                self.after(0, lambda: self._on_install_done(record, install_dir, log_path, install_rc))
+                self.after(0, lambda: self._on_install_done(
+                    record, install_dir, log_path, install_rc, _catalog, _product_key, _exe_hint))
 
         threading.Thread(target=_do_install, daemon=True).start()
 
-    def _on_install_done(self, record: "VersionRecord", install_dir: Path, log_path: Path, returncode: int) -> None:
+    def _on_install_done(
+        self,
+        record: "VersionRecord",
+        install_dir: Path,
+        log_path: Path,
+        returncode: int,
+        catalog: "CatalogStore | None" = None,
+        product_key: str | None = None,
+        exe_hint: str | None = None,
+    ) -> None:
+        # Use the catalog that was active when the install started, not the
+        # current one — the user may have switched products mid-install.
+        if catalog is None:
+            catalog = self.catalog
+        same_product = product_key is None or product_key == self.current_product_key
+
         if returncode == 0:
-            exe = self._guess_executable(install_dir)
+            exe = self._guess_executable_for_hint(
+                install_dir, exe_hint or self.product_def.exe_hint)
             updated = replace(record, status="installed", install_path=str(install_dir),
                               exe_path=str(exe) if exe else record.exe_path,
                               coexistence_conflict=False, last_error="")
-            self.catalog.upsert(updated)
-            self._refresh_list()
-            self._on_select_version(None)
-            self._set_status(f"Installed {record.version}")
+            catalog.upsert(updated)
+            if same_product:
+                self._refresh_list()
+                self._on_select_version(None)
+                self._set_status(f"Installed {record.version}")
             return
 
-        conflict = returncode in {1638, 1603}
+        conflict = returncode == 1638
         updated = replace(record,
                           status="conflict" if conflict else "install_failed",
                           coexistence_conflict=conflict,
                           last_error=f"msiexec exit code {returncode}")
-        self.catalog.upsert(updated)
-        self._refresh_list()
-        self._on_select_version(None)
+        catalog.upsert(updated)
+        if same_product:
+            self._refresh_list()
+            self._on_select_version(None)
         messagebox.showwarning(APP_NAME, (
             f"Install failed for {record.version}.\n"
             f"Exit code: {returncode}\nLog: {log_path}\n"
@@ -1070,17 +1281,33 @@ class RexdeskVersionManager(BaseTk):
         log_path = self.paths.product_root / f"uninstall_{slug}.log"
         self._set_status(f"Uninstalling {record.version}…  (do not close)")
         self.update_idletasks()
+        # Capture now so a mid-uninstall product switch doesn't write to the wrong catalog.
+        _catalog = self.catalog
+        _product_key = self.current_product_key
+        _exe_hint = self.product_def.exe_hint
 
         def _do_uninstall() -> None:
             try:
                 result = msi_ops.uninstall_with_msiexec(msi_path, log_path)
-                self.after(0, lambda: self._on_uninstall_done(record, log_path, result.returncode))
+                self.after(0, lambda: self._on_uninstall_done(
+                    record, log_path, result.returncode, _catalog, _product_key, _exe_hint))
             except OSError:
                 self.after(0, lambda: self._on_uninstall_cancelled(record))
 
         threading.Thread(target=_do_uninstall, daemon=True).start()
 
-    def _on_uninstall_done(self, record: "VersionRecord", log_path: Path, returncode: int) -> None:
+    def _on_uninstall_done(
+        self,
+        record: "VersionRecord",
+        log_path: Path,
+        returncode: int,
+        catalog: "CatalogStore | None" = None,
+        product_key: str | None = None,
+        exe_hint: str | None = None,
+    ) -> None:
+        if catalog is None:
+            catalog = self.catalog
+        same_product = product_key is None or product_key == self.current_product_key
         install_dir = Path(record.install_path) if record.install_path else None
 
         if returncode == 0:
@@ -1090,10 +1317,11 @@ class RexdeskVersionManager(BaseTk):
                 shutil.rmtree(install_dir, ignore_errors=True)
             updated = replace(record, status="not_installed",
                               install_path="", exe_path="", last_error="")
-            self.catalog.upsert(updated)
-            self._refresh_list()
-            self._on_select_version(None)
-            self._set_status(f"Uninstalled {record.version}; MSI kept")
+            catalog.upsert(updated)
+            if same_product:
+                self._refresh_list()
+                self._on_select_version(None)
+                self._set_status(f"Uninstalled {record.version}; MSI kept")
             return
 
         if returncode == 1605:
@@ -1107,37 +1335,41 @@ class RexdeskVersionManager(BaseTk):
             has_files = bool(
                 install_dir
                 and install_dir.exists()
-                and self._guess_executable(install_dir) is not None
+                and self._guess_executable_for_hint(
+                    install_dir, exe_hint or self.product_def.exe_hint) is not None
             )
             if has_files:
-                self._set_status(
-                    f"{record.version} is not registered with Windows Installer; "
-                    "files kept in place"
-                )
-                messagebox.showinfo(
-                    APP_NAME,
-                    f"{record.version} is not currently registered with Windows "
-                    "Installer, so there was nothing to uninstall.\n\n"
-                    "This usually means another version that shares the same "
-                    "installer UpgradeCode has taken over the registration.\n\n"
-                    "The files in this version's folder were kept so you can "
-                    "still launch it or use Reinstall to re-register it.",
-                )
+                if same_product:
+                    self._set_status(
+                        f"{record.version} is not registered with Windows Installer; "
+                        "files kept in place"
+                    )
+                    messagebox.showinfo(
+                        APP_NAME,
+                        f"{record.version} is not currently registered with Windows "
+                        "Installer, so there was nothing to uninstall.\n\n"
+                        "This usually means another version that shares the same "
+                        "installer UpgradeCode has taken over the registration.\n\n"
+                        "The files in this version's folder were kept so you can "
+                        "still launch it or use Reinstall to re-register it.",
+                    )
                 return
             updated = replace(record, status="not_installed",
                               install_path="", exe_path="", last_error="")
-            self.catalog.upsert(updated)
-            self._refresh_list()
-            self._on_select_version(None)
-            self._set_status(
-                f"{record.version} was not registered with Windows Installer; "
-                "catalog updated"
-            )
+            catalog.upsert(updated)
+            if same_product:
+                self._refresh_list()
+                self._on_select_version(None)
+                self._set_status(
+                    f"{record.version} was not registered with Windows Installer; "
+                    "catalog updated"
+                )
             return
 
         messagebox.showwarning(APP_NAME,
                                f"Uninstall failed (exit {returncode}).\nLog: {log_path}")
-        self._set_status("")
+        if same_product:
+            self._set_status("")
 
     def _on_uninstall_cancelled(self, record: "VersionRecord") -> None:
         self._set_status("")
@@ -1158,6 +1390,10 @@ class RexdeskVersionManager(BaseTk):
         uninstall_log = self.paths.product_root / f"uninstall_{slug}.log"
         install_log = self.paths.product_root / f"install_{slug}.log"
         shelter_targets = self._collect_shelter_targets(record.version)
+        # Capture now so a mid-reinstall product switch doesn't write to the wrong catalog.
+        _catalog = self.catalog
+        _product_key = self.current_product_key
+        _exe_hint = self.product_def.exe_hint
 
         self._set_status(f"Reinstalling {record.version}…  (do not close)")
         self.update_idletasks()
@@ -1172,13 +1408,16 @@ class RexdeskVersionManager(BaseTk):
                 # Installer; nothing to remove. Safe to proceed with the
                 # install step instead of treating it as a hard failure.
                 if un_result.returncode not in (0, 1605):
-                    self.after(0, lambda: (
-                        self._set_status("Reinstall failed during uninstall"),
+                    _rc = un_result.returncode
+                    self.after(0, lambda rc=_rc: (
                         messagebox.showwarning(
                             APP_NAME,
-                            f"Uninstall step failed (exit {un_result.returncode}).\n"
+                            f"Uninstall step failed (exit {rc}).\n"
                             f"Log: {uninstall_log}",
                         ),
+                        self._set_status(f"Reinstall failed (uninstall exit {rc})"),
+                        self._refresh_list(),
+                        self._on_select_version(None),
                     ))
                     return
                 result = msi_ops.install_with_msiexec(msi_path, install_dir, install_log)
@@ -1187,12 +1426,22 @@ class RexdeskVersionManager(BaseTk):
                 self.after(0, lambda e=exc: (
                     self._set_status("Reinstall error"),
                     messagebox.showerror(APP_NAME, f"Reinstall error:\n{e}"),
+                    self._refresh_list(),
+                    self._on_select_version(None),
                 ))
             finally:
-                msi_ops.unshelter_install_dirs(sheltered)
+                failed_restores = msi_ops.unshelter_install_dirs(sheltered)
+                if failed_restores:
+                    _fb = [str(b) for _, b in failed_restores]
+                    self.after(0, lambda fb=_fb: messagebox.showwarning(
+                        APP_NAME,
+                        f"Could not restore {len(fb)} sheltered version(s) to their "
+                        f"original location.\nBackup location(s): {', '.join(fb)}"
+                    ))
 
             if install_rc is not None:
-                self.after(0, lambda: self._on_install_done(record, install_dir, install_log, install_rc))
+                self.after(0, lambda: self._on_install_done(
+                    record, install_dir, install_log, install_rc, _catalog, _product_key, _exe_hint))
 
         threading.Thread(target=_do_reinstall, daemon=True).start()
 
@@ -1274,6 +1523,13 @@ def _enable_dpi_awareness() -> None:
 
 
 def main() -> None:
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "influx.rexdesk.versionmanager"
+        )
+    except Exception:
+        pass
     _enable_dpi_awareness()
     app = RexdeskVersionManager()
     app.mainloop()
