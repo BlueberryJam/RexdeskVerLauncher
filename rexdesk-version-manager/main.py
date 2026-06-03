@@ -557,12 +557,21 @@ class RexdeskVersionManager(BaseTk):
             self.catalog.remove(version)
 
     def _prune_missing_installs(self) -> None:
-        """Reset status to not_installed when the install folder has been removed."""
+        """Reset status to not_installed when the install folder is gone *or*
+        when it still exists on disk but no longer contains an executable
+        (e.g. a previous buggy uninstall wiped its contents)."""
         for record in self.catalog.all_versions():
-            if record.status == "installed" and record.install_path and not Path(record.install_path).exists():
-                updated = replace(record, status="not_installed",
-                                  install_path="", exe_path="", last_error="")
-                self.catalog.upsert(updated)
+            if record.status != "installed":
+                continue
+            if not record.install_path:
+                continue
+            install_dir = Path(record.install_path)
+            files_present = install_dir.exists() and self._guess_executable(install_dir) is not None
+            if files_present:
+                continue
+            updated = replace(record, status="not_installed",
+                              install_path="", exe_path="", last_error="")
+            self.catalog.upsert(updated)
 
     def _recover_existing_installs(self) -> None:
         """If a version has files on disk but is not marked installed, fix the catalog."""
@@ -1072,17 +1081,60 @@ class RexdeskVersionManager(BaseTk):
         threading.Thread(target=_do_uninstall, daemon=True).start()
 
     def _on_uninstall_done(self, record: "VersionRecord", log_path: Path, returncode: int) -> None:
-        if returncode == 0 or returncode == 1605:
+        install_dir = Path(record.install_path) if record.install_path else None
+
+        if returncode == 0:
+            # msiexec actually uninstalled the product. Clean up any
+            # leftover files in the install directory.
+            if install_dir and install_dir.exists():
+                shutil.rmtree(install_dir, ignore_errors=True)
             updated = replace(record, status="not_installed",
                               install_path="", exe_path="", last_error="")
             self.catalog.upsert(updated)
-            install_dir = Path(record.install_path) if record.install_path else None
-            if install_dir and install_dir.exists():
-                shutil.rmtree(install_dir, ignore_errors=True)
             self._refresh_list()
             self._on_select_version(None)
             self._set_status(f"Uninstalled {record.version}; MSI kept")
             return
+
+        if returncode == 1605:
+            # 1605 = "this action is only valid for products that are
+            # currently installed". Common cause: a different version that
+            # shares this MSI's UpgradeCode has taken over the Windows
+            # Installer registration, so msiexec no longer knows about
+            # this exact ProductCode. msiexec did NOT touch any files.
+            # We must NOT delete the install directory here — those files
+            # are the user's only copy of the version and are still usable.
+            has_files = bool(
+                install_dir
+                and install_dir.exists()
+                and self._guess_executable(install_dir) is not None
+            )
+            if has_files:
+                self._set_status(
+                    f"{record.version} is not registered with Windows Installer; "
+                    "files kept in place"
+                )
+                messagebox.showinfo(
+                    APP_NAME,
+                    f"{record.version} is not currently registered with Windows "
+                    "Installer, so there was nothing to uninstall.\n\n"
+                    "This usually means another version that shares the same "
+                    "installer UpgradeCode has taken over the registration.\n\n"
+                    "The files in this version's folder were kept so you can "
+                    "still launch it or use Reinstall to re-register it.",
+                )
+                return
+            updated = replace(record, status="not_installed",
+                              install_path="", exe_path="", last_error="")
+            self.catalog.upsert(updated)
+            self._refresh_list()
+            self._on_select_version(None)
+            self._set_status(
+                f"{record.version} was not registered with Windows Installer; "
+                "catalog updated"
+            )
+            return
+
         messagebox.showwarning(APP_NAME,
                                f"Uninstall failed (exit {returncode}).\nLog: {log_path}")
         self._set_status("")
@@ -1116,7 +1168,10 @@ class RexdeskVersionManager(BaseTk):
             try:
                 sheltered = msi_ops.shelter_install_dirs(shelter_targets)
                 un_result = msi_ops.uninstall_with_msiexec(msi_path, uninstall_log)
-                if un_result.returncode != 0:
+                # 1605 = product not currently registered with Windows
+                # Installer; nothing to remove. Safe to proceed with the
+                # install step instead of treating it as a hard failure.
+                if un_result.returncode not in (0, 1605):
                     self.after(0, lambda: (
                         self._set_status("Reinstall failed during uninstall"),
                         messagebox.showwarning(
