@@ -117,10 +117,19 @@ def _rewrite_catalog_paths(catalog_path: Path, old_root: Path, new_root: Path) -
     if not catalog_path.exists():
         return
     try:
-        text = catalog_path.read_text(encoding="utf-8")
-        old_prefix = str(old_root).replace("\\", "\\\\")
-        new_prefix = str(new_root).replace("\\", "\\\\")
-        text = text.replace(old_prefix, new_prefix)
-        catalog_path.write_text(text, encoding="utf-8")
+        data = json.loads(catalog_path.read_text(encoding="utf-8"))
+        old_str = str(old_root)
+        new_str = str(new_root)
+
+        def _rewrite(value: object) -> object:
+            if isinstance(value, str) and value.startswith(old_str):
+                return new_str + value[len(old_str):]
+            if isinstance(value, dict):
+                return {k: _rewrite(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_rewrite(item) for item in value]
+            return value
+
+        catalog_path.write_text(json.dumps(_rewrite(data), indent=2), encoding="utf-8")
     except Exception:
         pass

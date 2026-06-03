@@ -120,6 +120,37 @@ if errorlevel 1 (
 )
 
 echo Release notes published for %TAG_NAME%.
+
+echo.
+echo Uploading release assets...
+set "PORTABLE_EXE=rexdesk-version-manager\release\Rexdesk Version Manager.exe"
+set "SETUP_EXE=rexdesk-version-manager\release\Rexdesk-Version-Manager-Setup.exe"
+
+if exist "%PORTABLE_EXE%" (
+  gh release upload "%TAG_NAME%" "%PORTABLE_EXE%" --clobber
+  if errorlevel 1 (
+    echo Failed to upload portable EXE.
+    del /q "%NOTES_FILE%" >nul 2>&1
+    goto :done
+  )
+  echo Uploaded portable EXE.
+) else (
+  echo Portable EXE not found: %PORTABLE_EXE%
+)
+
+if exist "%SETUP_EXE%" (
+  gh release upload "%TAG_NAME%" "%SETUP_EXE%" --clobber
+  if errorlevel 1 (
+    echo Failed to upload installer EXE.
+    del /q "%NOTES_FILE%" >nul 2>&1
+    goto :done
+  )
+  echo Uploaded installer EXE.
+) else (
+  echo Installer EXE not found: %SETUP_EXE%
+  echo Run rexdesk-version-manager\build-installer.bat if you want the setup EXE attached too.
+)
+
 del /q "%NOTES_FILE%" >nul 2>&1
 
 :done

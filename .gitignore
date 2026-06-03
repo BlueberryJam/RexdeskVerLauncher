@@ -1,5 +1,15 @@
-# Local version-manager data (MSIs, installs, catalogs with absolute paths)
-library/
+# Local version-manager data
+# Share notes, but keep installed app copies, MSI binaries, logs, backups,
+# and catalogs with machine-specific absolute paths out of git.
+rexdesk-version-manager/library/**
+!rexdesk-version-manager/library/
+!rexdesk-version-manager/library/*/
+!rexdesk-version-manager/library/*/bug_notes/
+!rexdesk-version-manager/library/*/bug_notes/*.txt
+!rexdesk-version-manager/library/*/patch_notes/
+!rexdesk-version-manager/library/*/patch_notes/*.txt
+!rexdesk-version-manager/library/*/msi/
+!rexdesk-version-manager/library/*/msi/*_notes.txt
 
 # Python
 __pycache__/

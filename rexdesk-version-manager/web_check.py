@@ -28,7 +28,7 @@ def fetch_live_version(page_url: str) -> Optional[str]:
 
     # Primary: grab version from the MSI download URL
     #   e.g. https://downloads.influxtechnology.com/ReXdesk/ReXdesk_1.2.37.0.msi
-    m = re.search(r"[\w/]+[_/](\d+(?:\.\d+){2,})\.msi", html, re.IGNORECASE)
+    m = re.search(r"influxtechnology\.com/[^\"'\s]*?[_/](\d+(?:\.\d+){2,})\.msi", html, re.IGNORECASE)
     if m:
         return m.group(1)
 
