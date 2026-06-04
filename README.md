@@ -2,14 +2,14 @@
 
 So you can have multiple versions of Rexdesk installed on a PC for testing.
 
+Version data is shared by the BAT launcher and EXE under `library/` in this folder.
+
 ## Quick Start
 
-The app lives in `rexdesk-version-manager/`.
-
-1. Open `rexdesk-version-manager/`
-2. Double-click `Install-and-Run.bat`
+Double-click `Install-and-Run.bat`.
 
 That script creates a local Python virtual environment, installs dependencies, and launches the app.
+It also creates `Rexdesk Version Manager.exe` in this folder.
 
 ## For End Users (No Python Required)
 

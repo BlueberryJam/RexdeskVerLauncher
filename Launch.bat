@@ -1,8 +1,9 @@
 @echo off
-cd /d "%~dp0rexdesk-version-manager"
-
-if exist ".venv\Scripts\python.exe" (
+if exist "%~dp0Rexdesk Version Manager.exe" (
+    start "" "%~dp0Rexdesk Version Manager.exe"
+) else if exist "%~dp0rexdesk-version-manager\.venv\Scripts\python.exe" (
+    cd /d "%~dp0rexdesk-version-manager"
     ".venv\Scripts\python.exe" main.py
 ) else (
-    call "Install-and-Run.bat"
+    call "%~dp0Install-and-Run.bat"
 )

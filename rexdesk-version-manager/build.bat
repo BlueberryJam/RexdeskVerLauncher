@@ -99,17 +99,16 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-if not exist "release" mkdir release
-copy /y "dist\Rexdesk Version Manager.exe" "release\Rexdesk Version Manager.exe" >nul
+copy /y "dist\Rexdesk Version Manager.exe" "..\Rexdesk Version Manager.exe" >nul
 if %errorlevel% neq 0 (
-    echo Failed to copy EXE into release folder.
+    echo Failed to copy EXE into the RexdeskVerLauncher folder.
     pause
     exit /b 1
 )
 
 echo.
 echo Build complete.
-echo Portable EXE: %cd%\release\Rexdesk Version Manager.exe
+echo Portable EXE: %cd%\..\Rexdesk Version Manager.exe
 echo.
 echo Tip: run build-installer.bat to create a Windows installer package.
 pause

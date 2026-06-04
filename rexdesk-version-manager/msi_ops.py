@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes
+import base64
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -261,10 +263,78 @@ def open_folder(folder_path: Path) -> None:
     os.startfile(str(folder_path))  # type: ignore[attr-defined]
 
 
+def _powershell_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _shortcut_cache_dir(exe_path: Path) -> Path:
+    install_cache = exe_path.parent / "_version_manager_shortcuts"
+    try:
+        install_cache.mkdir(parents=True, exist_ok=True)
+        return install_cache
+    except OSError:
+        pass
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "Rexdesk Version Manager" / "shortcuts"
+    return Path(os.environ.get("TEMP", str(Path.home()))) / "Rexdesk Version Manager" / "shortcuts"
+
+
+def _find_icon_for_executable(exe_path: Path) -> Path | None:
+    preferred = exe_path.parent / "RexDesk.ico"
+    if preferred.is_file():
+        return preferred
+    icons = sorted(exe_path.parent.glob("*.ico"))
+    return icons[0] if icons else None
+
+
+def _create_launch_shortcut(exe_path: Path) -> Path:
+    shortcut_dir = _shortcut_cache_dir(exe_path)
+    shortcut_dir.mkdir(parents=True, exist_ok=True)
+    shortcut_hash = hashlib.sha1(str(exe_path).encode("utf-8")).hexdigest()[:12]
+    shortcut_path = shortcut_dir / f"{exe_path.stem}-{shortcut_hash}.lnk"
+    icon_path = _find_icon_for_executable(exe_path)
+
+    script_lines = [
+        "$ErrorActionPreference = 'Stop'",
+        "$w = New-Object -ComObject WScript.Shell",
+        f"$s = $w.CreateShortcut({_powershell_literal(str(shortcut_path))})",
+        f"$s.TargetPath = {_powershell_literal(str(exe_path))}",
+        f"$s.WorkingDirectory = {_powershell_literal(str(exe_path.parent))}",
+        "$s.WindowStyle = 1",
+    ]
+    if icon_path:
+        script_lines.append(f"$s.IconLocation = {_powershell_literal(str(icon_path) + ',0')}")
+    script_lines.append("$s.Save()")
+
+    encoded = base64.b64encode("\r\n".join(script_lines).encode("utf-16le")).decode("ascii")
+    no_window = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+            encoded,
+        ],
+        check=True,
+        creationflags=no_window,
+    )
+    return shortcut_path
+
+
 def launch_executable(exe_path: Path) -> None:
     if not exe_path.exists():
         raise FileNotFoundError(exe_path)
-    os.startfile(str(exe_path))  # type: ignore[attr-defined]
+    try:
+        shortcut_path = _create_launch_shortcut(exe_path)
+        os.startfile(str(shortcut_path), cwd=str(exe_path.parent))  # type: ignore[attr-defined]
+    except Exception:
+        no_window = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        subprocess.Popen([str(exe_path)], cwd=str(exe_path.parent), creationflags=no_window)
 
 
 _SHELTER_RETRIES = 3

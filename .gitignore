@@ -29,5 +29,7 @@ dist/
 debug*.log
 .cursor/
 
-# Packaged app at repo root (use GitHub Releases for binaries)
-/Rexdesk Version Manager.exe
+# Local installed app copies and logs
+library/*/installs/
+library/*/_backup/
+library/*/*.log

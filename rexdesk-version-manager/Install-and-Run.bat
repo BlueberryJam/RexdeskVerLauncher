@@ -109,7 +109,7 @@ if !errorlevel! equ 0 (
 :: ════════════════════════════════════════════════════════════════════════════
 :: Steps 6-7 — Build EXE (optional)
 :: ════════════════════════════════════════════════════════════════════════════
-if exist "release\Rexdesk Version Manager.exe" (
+if exist "..\Rexdesk Version Manager.exe" (
     echo.
     choice /c YN /n /m "An EXE already exists. Rebuild it? (Y/N): "
     if !errorlevel! equ 2 set "REBUILD_EXE=N"
@@ -133,14 +133,13 @@ if /i "!REBUILD_EXE!"=="Y" (
         exit /b 1
     )
 
-    if not exist "release" mkdir release
-    copy /y "dist\Rexdesk Version Manager.exe" "release\Rexdesk Version Manager.exe" >nul
+    copy /y "dist\Rexdesk Version Manager.exe" "..\Rexdesk Version Manager.exe" >nul
     if !errorlevel! neq 0 (
-        echo Failed to copy EXE to release folder.
+        echo Failed to copy EXE to the RexdeskVerLauncher folder.
         pause
         exit /b 1
     )
-    echo EXE created: %cd%\release\Rexdesk Version Manager.exe
+    echo EXE created: %cd%\..\Rexdesk Version Manager.exe
 ) else (
     call :show_stage 6 "EXE rebuild skipped"
     call :show_stage 7 "Using existing EXE"
@@ -278,8 +277,8 @@ set "_LAUNCH=!_LAUNCH_DIR!\Launch Rexdesk Version Manager.bat"
     echo @echo off
     echo setlocal
     echo cd /d "%%~dp0rexdesk-version-manager"
-    echo if exist "release\Rexdesk Version Manager.exe" ^(
-    echo     start "" "release\Rexdesk Version Manager.exe"
+    echo if exist "..\Rexdesk Version Manager.exe" ^(
+    echo     start "" "..\Rexdesk Version Manager.exe"
     echo ^) else if exist ".venv\Scripts\pythonw.exe" ^(
     echo     start "" ".venv\Scripts\pythonw.exe" ".\main.py"
     echo ^) else ^(

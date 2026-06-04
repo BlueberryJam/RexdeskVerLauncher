@@ -8,8 +8,8 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-if not exist "release\Rexdesk Version Manager.exe" (
-    echo Expected EXE not found at release\Rexdesk Version Manager.exe
+if not exist "..\Rexdesk Version Manager.exe" (
+    echo Expected EXE not found at ..\Rexdesk Version Manager.exe
     exit /b 1
 )
 
@@ -36,5 +36,5 @@ if %errorlevel% neq 0 (
 
 echo.
 echo Installer created in:
-echo %cd%\release\Rexdesk-Version-Manager-Setup.exe
+echo %cd%\..\Rexdesk-Version-Manager-Setup.exe
 pause

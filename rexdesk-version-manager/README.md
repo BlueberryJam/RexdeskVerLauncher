@@ -5,12 +5,12 @@ Windows desktop app for keeping Rexdesk MSI versions archived, tracked, and laun
 ## What it does now
 
 - Shows version list with `Version`, `Status`, `Installed Path`, and `MSI Saved`.
-- Keeps a local catalog at `library/catalog.json`.
-- Stores every imported MSI under `library/msi/`.
-- Loads and saves per-version patch notes in `library/patch_notes/<version>.txt`.
+- Keeps local catalogs under `../library/<product>/catalog.json`.
+- Stores every imported MSI under `../library/<product>/msi/`.
+- Loads and saves per-version notes under `../library/<product>/`.
 - Supports actions for selected version:
   - `Install`, `Uninstall`, `Reinstall`
-  - `Launch`, `Open Install Folder`
+  - `Launch`, `Open Install Folder`, `USB Driver`, `Firmware`
   - `Reveal MSI`, `Copy MSI Path`, `Export MSI Copy`
 - Drag-and-drop MSI support when `tkinterdnd2` is installed.
 
@@ -18,10 +18,10 @@ Windows desktop app for keeping Rexdesk MSI versions archived, tracked, and laun
 
 Generated automatically:
 
-- `library/msi/`
-- `library/installs/<version>/`
-- `library/patch_notes/<version>.txt`
-- `library/catalog.json`
+- `../library/<product>/msi/`
+- `../library/<product>/installs/<version>/`
+- `../library/<product>/patch_notes/<version>.txt`
+- `../library/<product>/catalog.json`
 
 ## Run
 
@@ -59,13 +59,13 @@ If you want to share this app with users who do not have Python installed:
 1. Build portable EXE
 
    - Run `build.bat`
-   - Output: `release/Rexdesk Version Manager.exe`
+   - Output: `../Rexdesk Version Manager.exe`
 
 2. Build Windows installer (recommended)
 
    - Install Inno Setup 6: https://jrsoftware.org/isinfo.php
    - Run `build-installer.bat`
-   - Output: `release/Rexdesk-Version-Manager-Setup.exe`
+   - Output: `../Rexdesk-Version-Manager-Setup.exe`
 
 Users can then install by double-clicking the setup EXE.
 

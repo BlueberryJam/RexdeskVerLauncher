@@ -370,6 +370,10 @@ class RexdeskVersionManager(BaseTk):
                                         command=self._uninstall_selected)
         self.btn_reinstall = ttk.Button(self.actions_frame, text="Reinstall",
                                         command=self._reinstall_selected)
+        self.btn_usb_driver = ttk.Button(self.actions_frame, text="USB Driver",
+                                         command=self._open_usb_driver)
+        self.btn_firmware = ttk.Button(self.actions_frame, text="Firmware",
+                                       command=self._open_firmware)
         self.btn_open_folder = ttk.Button(self.actions_frame, text="Open in Folder",
                                           command=self._open_install_folder)
 
@@ -446,7 +450,8 @@ class RexdeskVersionManager(BaseTk):
         """Show the correct set of action buttons depending on install state."""
         all_btns = (
             self.btn_install, self.btn_open_msi_folder, self.btn_remove,
-            self.btn_launch, self.btn_uninstall, self.btn_reinstall, self.btn_open_folder,
+            self.btn_launch, self.btn_uninstall, self.btn_reinstall,
+            self.btn_usb_driver, self.btn_firmware, self.btn_open_folder,
         )
         for btn in all_btns:
             btn.pack_forget()
@@ -455,6 +460,8 @@ class RexdeskVersionManager(BaseTk):
             self.btn_launch.pack(side=tk.LEFT, padx=(0, 6))
             self.btn_uninstall.pack(side=tk.LEFT, padx=(0, 6))
             self.btn_reinstall.pack(side=tk.LEFT, padx=(0, 6))
+            self.btn_usb_driver.pack(side=tk.LEFT, padx=(0, 6))
+            self.btn_firmware.pack(side=tk.LEFT, padx=(0, 6))
             self.btn_open_folder.pack(side=tk.LEFT)
         else:
             self.btn_install.pack(side=tk.LEFT, padx=(0, 6))
@@ -539,17 +546,28 @@ class RexdeskVersionManager(BaseTk):
 
     # ------------------------------------------------------------------ catalog recovery
     def _recover_catalog_from_disk(self) -> None:
-        """If the catalog is empty but MSI files exist on disk, rebuild entries."""
+        """If the catalog is empty, rebuild entries from saved MSI/note files."""
         if self.catalog.all_versions():
             return
-        msi_files = sorted(self.paths.msi_dir.glob("*.msi"))
-        if not msi_files:
-            return
-        for msi_file in msi_files:
+
+        versions: dict[str, dict[str, Path]] = {}
+        for msi_file in sorted(self.paths.msi_dir.glob("*.msi")):
             version = msi_ops.infer_version_label(msi_file)
+            versions.setdefault(version, {})["msi"] = msi_file
+        for notes_file in sorted(self.paths.msi_dir.glob("*_notes.txt")):
+            version = notes_file.stem.removesuffix("_notes")
+            versions.setdefault(version, {})["notes"] = notes_file
+        for bug_file in sorted(self.paths.bug_notes_dir.glob("*.txt")):
+            versions.setdefault(bug_file.stem, {})["bug"] = bug_file
+
+        if not versions:
+            return
+
+        for version, files in versions.items():
             slug = safe_version_slug(version)
-            notes_path = msi_file.parent / f"{msi_file.stem}_notes.txt"
-            bug_path = self.paths.bug_notes_dir / f"{slug}.txt"
+            msi_file = files.get("msi")
+            notes_path = files.get("notes") or self.paths.msi_dir / f"{slug}_notes.txt"
+            bug_path = files.get("bug") or self.paths.bug_notes_dir / f"{slug}.txt"
             install_dir = self.paths.installs_dir / slug
 
             status = "not_installed"
@@ -567,7 +585,7 @@ class RexdeskVersionManager(BaseTk):
                 status=status,
                 install_path=install_path,
                 exe_path=exe_path,
-                msi_path=str(msi_file),
+                msi_path=str(msi_file) if msi_file else "",
                 notes_path=str(notes_path) if notes_path.exists() else "",
                 bug_notes_path=str(bug_path) if bug_path.exists() else "",
             ))
@@ -1481,6 +1499,97 @@ class RexdeskVersionManager(BaseTk):
             messagebox.showwarning(APP_NAME, "No install path recorded.")
             return
         msi_ops.open_folder(Path(record.install_path))
+
+    @staticmethod
+    def _find_usb_driver_installers(install_dir: Path) -> list[Path]:
+        if not install_dir.exists():
+            return []
+
+        preferred = install_dir / "Drivers" / "ReXgenDriversInstaller.exe"
+        if preferred.is_file():
+            return [preferred]
+
+        driver_roots = [
+            p for p in (install_dir / "Drivers", install_dir / "Driver")
+            if p.is_dir()
+        ]
+        search_roots = driver_roots or [install_dir]
+        patterns = (
+            "*driver*installer*.exe",
+            "*drivers*installer*.exe",
+            "*usb*driver*.exe",
+            "*usb*.exe",
+            "dpinst*.exe",
+            "*ftdi*.exe",
+            "*silab*.exe",
+            "*ch340*.exe",
+            "*.inf",
+        )
+
+        found: dict[str, Path] = {}
+        for root in search_roots:
+            for pattern in patterns:
+                for path in root.rglob(pattern):
+                    if path.is_file():
+                        found[str(path.resolve()).lower()] = path
+
+        return sorted(
+            found.values(),
+            key=lambda p: (
+                "driver" not in p.name.lower(),
+                "usb" not in p.name.lower(),
+                len(p.parts),
+                p.name.lower(),
+            ),
+        )
+
+    def _open_usb_driver(self) -> None:
+        record = self._get_selected_record()
+        if not record:
+            return
+        install_dir = Path(record.install_path) if record.install_path else None
+        if not install_dir or not install_dir.exists():
+            messagebox.showwarning(APP_NAME, "No install folder found for this version.")
+            return
+
+        installers = self._find_usb_driver_installers(install_dir)
+        if not installers:
+            messagebox.showwarning(
+                APP_NAME,
+                f"No USB driver installer was found under:\n{install_dir}",
+            )
+            return
+
+        target = installers[0]
+        if len(installers) == 1:
+            msi_ops.open_in_explorer(target)
+            self._set_status(f"Opened USB driver location for {record.version}")
+            return
+
+        msi_ops.open_folder(target.parent)
+        self._set_status(
+            f"Found {len(installers)} USB driver candidates for {record.version}"
+        )
+
+    def _open_firmware(self) -> None:
+        record = self._get_selected_record()
+        if not record:
+            return
+        install_dir = Path(record.install_path) if record.install_path else None
+        if not install_dir or not install_dir.exists():
+            messagebox.showwarning(APP_NAME, "No install folder found for this version.")
+            return
+
+        firmware_dir = install_dir / "Firmware"
+        if not firmware_dir.is_dir():
+            messagebox.showwarning(
+                APP_NAME,
+                f"No Firmware folder was found under:\n{install_dir}",
+            )
+            return
+
+        msi_ops.open_folder(firmware_dir)
+        self._set_status(f"Opened firmware folder for {record.version}")
 
     def _remove_selected(self) -> None:
         record = self._get_selected_record()

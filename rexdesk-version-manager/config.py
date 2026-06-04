@@ -53,7 +53,10 @@ class Paths:
 def _app_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+    source_root = Path(__file__).resolve().parent
+    if source_root.name == "rexdesk-version-manager":
+        return source_root.parent
+    return source_root
 
 
 def assets_dir() -> Path:
