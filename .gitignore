@@ -33,3 +33,4 @@ debug*.log
 library/*/installs/
 library/*/_backup/
 library/*/*.log
+library/*/catalog.json
