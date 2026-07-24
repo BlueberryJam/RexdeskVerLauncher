@@ -1,0 +1,2 @@
+Bundled firmware: v3.87.11
+Predates this changelog (changelog begins at v3.88.1).

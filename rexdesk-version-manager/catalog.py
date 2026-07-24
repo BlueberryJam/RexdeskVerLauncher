@@ -45,7 +45,15 @@ class CatalogStore:
         self.catalog_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def all_versions(self) -> list[VersionRecord]:
-        return sorted(self._records.values(), key=lambda r: r.version.lower())
+        """Newest version first (numeric-aware)."""
+        def _key(record: VersionRecord) -> tuple:
+            try:
+                return (1, tuple(int(p) for p in record.version.split(".")))
+            except ValueError:
+                # Non-numeric labels sort below numeric ones.
+                return (0, record.version.lower())
+
+        return sorted(self._records.values(), key=_key, reverse=True)
 
     def get(self, version: str) -> VersionRecord | None:
         return self._records.get(version)

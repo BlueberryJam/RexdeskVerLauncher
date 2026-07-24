@@ -20,10 +20,13 @@ __pycache__/
 venv/
 .env
 
-# PyInstaller / local builds
+# PyInstaller / local builds (the app now runs from source, no bundled exe)
 build/
 dist/
 *.spec.bak
+Rexdesk Version Manager.exe
+Rexdesk Version Manager.exe.bak
+Rexdesk-Version-Manager-Setup.exe
 
 # Logs / IDE
 debug*.log

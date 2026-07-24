@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import io
+import os
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 import shutil
@@ -14,11 +16,12 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from catalog import CatalogStore, VersionRecord
 from config import (
     APP_NAME, DEFAULT_PRODUCT, PRODUCTS, PRODUCT_KEYS, ProductDef,
-    assets_dir, ensure_layout, migrate_legacy_library, resolve_paths, safe_version_slug,
+    assets_dir, build_download_url, ensure_layout, migrate_legacy_library,
+    resolve_paths, safe_version_slug,
 )
 from logo_assets import load_product_logo
 import msi_ops
-from web_check import fetch_live_version
+from web_check import discover_newer_versions, fetch_live_version
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -50,6 +53,14 @@ def _norm_version(v: str) -> str:
     return ".".join(parts)
 
 
+def _version_key(v: str) -> tuple:
+    """Numeric-comparable key for a dotted version string."""
+    try:
+        return tuple(int(p) for p in v.split("."))
+    except ValueError:
+        return (-1,)
+
+
 MSI_ICON_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAJlJREFUWIXt"
     "ljEOgCAQRIf4/y/jCVhYWEisBRYaC42FBQkJCy7DLGR3k0koxZ/MzAIAAAAAAA"
@@ -65,6 +76,19 @@ def _load_msi_icon() -> tk.PhotoImage | None:
         return tk.PhotoImage(data=data)
     except Exception:
         return None
+
+
+class _AutoScrollbar(ttk.Scrollbar):
+    """A scrollbar that hides itself when the whole view fits and re-appears
+    when scrolling becomes possible. Must be managed with grid — grid_remove()
+    remembers the cell, so it restores cleanly (unlike pack) across refreshes."""
+
+    def set(self, lo, hi) -> None:  # type: ignore[override]
+        if float(lo) <= 0.0 and float(hi) >= 1.0:
+            self.grid_remove()
+        else:
+            self.grid()
+        super().set(lo, hi)
 
 
 class RexdeskVersionManager(BaseTk):
@@ -158,6 +182,22 @@ class RexdeskVersionManager(BaseTk):
                    selectforeground=[("readonly", FG_BRIGHT)])
         style.configure("ProductBar.TFrame", background=BG_LIGHT)
 
+        # Minimal, arrowless, flat vertical scrollbar for the version list.
+        style.layout("Minimal.Vertical.TScrollbar", [
+            ("Vertical.Scrollbar.trough", {
+                "sticky": "ns",
+                "children": [
+                    ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"}),
+                ],
+            }),
+        ])
+        style.configure("Minimal.Vertical.TScrollbar",
+                        gripcount=0, borderwidth=0, relief="flat", width=8,
+                        troughcolor=BG_DARK, background="#454545",
+                        darkcolor=BG_DARK, lightcolor=BG_DARK, bordercolor=BG_DARK)
+        style.map("Minimal.Vertical.TScrollbar",
+                  background=[("active", "#5a5a5a"), ("pressed", "#6a6a6a")])
+
     def _build_ui(self) -> None:
         self.msi_icon = _load_msi_icon()
 
@@ -205,9 +245,14 @@ class RexdeskVersionManager(BaseTk):
         btn_row.pack(fill=tk.X, pady=(8, 8))
         ttk.Button(btn_row, text="+ Add MSI", style="Accent.TButton",
                     command=self._choose_and_add_msi).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._check_updates_btn = ttk.Button(btn_row, text="Check for Updates",
+                    command=self._check_for_updates)
+        self._check_updates_btn.pack(side=tk.LEFT, padx=(6, 0))
 
         list_frame = ttk.Frame(left)
         list_frame.pack(fill=tk.BOTH, expand=True)
+        list_frame.grid_rowconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(0, weight=1)
         self._list_frame = list_frame
 
         self.version_list = tk.Text(
@@ -216,21 +261,32 @@ class RexdeskVersionManager(BaseTk):
             font=("Segoe UI", 11), cursor="arrow", state="disabled",
             wrap="none", takefocus=True, spacing1=3, spacing3=3,
         )
+        # Reserve a fixed left gutter so version numbers line up in one column
+        # whether or not the row has a download arrow. Measured from the font so
+        # it stays correct under DPI scaling.
+        from tkinter import font as _tkfont
+        _gutter_px = _tkfont.Font(font=("Segoe UI", 11, "bold")).measure("  ↓  ")
+        self.version_list.configure(tabs=(_gutter_px,))
+
         self.version_list.tag_configure("installed", foreground=FG_BRIGHT)
         self.version_list.tag_configure("not_installed", foreground="#707070")
+        self.version_list.tag_configure("available", foreground="#6a6a6a")
+        self.version_list.tag_configure("arrow", foreground=ACCENT,
+                                        font=("Segoe UI", 11, "bold"))
         self.version_list.tag_configure("conflict", foreground="#d4a056")
         self.version_list.tag_configure("install_failed", foreground="#cc6666")
         self.version_list.tag_configure("live", foreground=ACCENT)
         self.version_list.tag_configure("sel_line", background=SELECT_BG)
         self.version_list.tag_raise("sel_line")
 
-        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL,
-                                   command=self.version_list.yview)
+        scrollbar = _AutoScrollbar(list_frame, orient=tk.VERTICAL,
+                                   command=self.version_list.yview,
+                                   style="Minimal.Vertical.TScrollbar")
         self.version_list.configure(yscrollcommand=scrollbar.set)
-        self.version_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.version_list.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
         self.version_list.bind("<Button-1>", self._on_list_click)
-        self.version_list.bind("<Double-Button-1>", lambda _e: "break")
+        self.version_list.bind("<Double-Button-1>", self._on_list_double_click)
         self.version_list.bind("<Up>", self._on_list_key_up)
         self.version_list.bind("<Down>", self._on_list_key_down)
 
@@ -305,10 +361,15 @@ class RexdeskVersionManager(BaseTk):
                                        command=self._reveal_msi)
         self.msi_btn.pack(side=tk.LEFT)
 
-        ttk.Button(msi_row, text="Copy MSI Path",
-                    command=self._copy_msi_path).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(msi_row, text="Export MSI",
-                    command=self._export_msi).pack(side=tk.LEFT, padx=(8, 0))
+        self.copy_msi_path_btn = ttk.Button(msi_row, text="Copy MSI Path",
+                                            command=self._copy_msi_path)
+        self.copy_msi_path_btn.pack(side=tk.LEFT, padx=(8, 0))
+        self.export_msi_btn = ttk.Button(msi_row, text="Export MSI",
+                                         command=self._export_msi)
+        self.export_msi_btn.pack(side=tk.LEFT, padx=(8, 0))
+        # Copy Download URL works even for link-only versions, so it stays enabled.
+        ttk.Button(msi_row, text="Copy Download URL",
+                    command=self._copy_download_url).pack(side=tk.LEFT, padx=(8, 0))
 
         sep1 = tk.Frame(self.detail_frame, bg=BORDER, height=1)
         sep1.pack(fill=tk.X, pady=(14, 10))
@@ -354,6 +415,11 @@ class RexdeskVersionManager(BaseTk):
         # ---- Actions ----
         self.actions_frame = ttk.Frame(self.detail_frame)
         self.actions_frame.pack(fill=tk.X)
+
+        # Available (on server, not downloaded) set
+        self.btn_download_available = ttk.Button(
+            self.actions_frame, text="↓ Download", style="Accent.TButton",
+            command=self._download_available_selected)
 
         # Not-installed set
         self.btn_install = ttk.Button(self.actions_frame, text="Install",
@@ -449,6 +515,7 @@ class RexdeskVersionManager(BaseTk):
     def _update_action_buttons(self, record: "VersionRecord") -> None:
         """Show the correct set of action buttons depending on install state."""
         all_btns = (
+            self.btn_download_available,
             self.btn_install, self.btn_open_msi_folder, self.btn_remove,
             self.btn_launch, self.btn_uninstall, self.btn_reinstall,
             self.btn_usb_driver, self.btn_firmware, self.btn_open_folder,
@@ -463,6 +530,9 @@ class RexdeskVersionManager(BaseTk):
             self.btn_usb_driver.pack(side=tk.LEFT, padx=(0, 6))
             self.btn_firmware.pack(side=tk.LEFT, padx=(0, 6))
             self.btn_open_folder.pack(side=tk.LEFT)
+        elif record.status == "available":
+            self.btn_download_available.pack(side=tk.LEFT, padx=(0, 6))
+            self.btn_remove.pack(side=tk.LEFT)
         else:
             self.btn_install.pack(side=tk.LEFT, padx=(0, 6))
             self.btn_open_msi_folder.pack(side=tk.LEFT, padx=(0, 6))
@@ -685,14 +755,23 @@ class RexdeskVersionManager(BaseTk):
             if idx > 0:
                 self.version_list.insert(tk.END, "\n")
 
-            status_tag = {
-                "installed": "installed",
-                "conflict": "conflict",
-                "install_failed": "install_failed",
-            }.get(record.status, "not_installed")
+            if record.status == "available":
+                # On the server but not downloaded yet: grey text + download arrow.
+                # Arrow sits in the gutter; a tab aligns the number with all rows.
+                self.version_list.insert(tk.END, "  ", "available")
+                self.version_list.insert(tk.END, "↓", "arrow")
+                self.version_list.insert(tk.END, "\t", "available")
+                self.version_list.insert(tk.END, record.version, "available")
+            else:
+                status_tag = {
+                    "installed": "installed",
+                    "conflict": "conflict",
+                    "install_failed": "install_failed",
+                }.get(record.status, "not_installed")
 
-            prefix = "  !   " if record.status in ("conflict", "install_failed") else "  "
-            self.version_list.insert(tk.END, f"{prefix}{record.version}", status_tag)
+                # Blank (or "!") gutter, then a tab to the shared number column.
+                gutter = "  ! " if record.status in ("conflict", "install_failed") else "  "
+                self.version_list.insert(tk.END, f"{gutter}\t{record.version}", status_tag)
 
             if self._is_live_version(record.version):
                 self.version_list.insert(tk.END, "  - Live", "live")
@@ -758,10 +837,16 @@ class RexdeskVersionManager(BaseTk):
         status_text = {
             "installed": "Installed",
             "not_installed": "Not installed",
+            "available": "Available — not downloaded",
             "conflict": "Conflict",
             "install_failed": "Install failed",
         }.get(record.status, record.status)
         self.status_badge.configure(text=f"({status_text})")
+
+        # Grey out MSI-file actions when there's no downloaded MSI yet.
+        msi_state = ["!disabled"] if record.msi_path else ["disabled"]
+        for btn in (self.msi_btn, self.copy_msi_path_btn, self.export_msi_btn):
+            btn.state(msi_state)
 
         self._loading_notes = True
         try:
@@ -1110,6 +1195,9 @@ class RexdeskVersionManager(BaseTk):
         record = self._get_selected_record()
         if not record:
             return
+        if not record.msi_path:
+            messagebox.showinfo(APP_NAME, "This version hasn't been downloaded yet.")
+            return
         msi_path = Path(record.msi_path)
         if not msi_path.exists():
             messagebox.showwarning(APP_NAME, "MSI file no longer exists.")
@@ -1120,6 +1208,9 @@ class RexdeskVersionManager(BaseTk):
         record = self._get_selected_record()
         if not record:
             return
+        if not record.msi_path:
+            messagebox.showinfo(APP_NAME, "This version hasn't been downloaded yet.")
+            return
         self.clipboard_clear()
         self.clipboard_append(record.msi_path)
         self._set_status("Copied MSI path to clipboard")
@@ -1127,6 +1218,9 @@ class RexdeskVersionManager(BaseTk):
     def _export_msi(self) -> None:
         record = self._get_selected_record()
         if not record:
+            return
+        if not record.msi_path:
+            messagebox.showinfo(APP_NAME, "This version hasn't been downloaded yet.")
             return
         msi_path = Path(record.msi_path)
         if not msi_path.exists():
@@ -1137,6 +1231,233 @@ class RexdeskVersionManager(BaseTk):
             return
         exported = msi_ops.export_msi_copy(msi_path, Path(destination))
         self._set_status(f"Exported MSI to {exported}")
+
+    # ------------------------------------------------------------------ download URL
+    def _copy_download_url(self) -> None:
+        """Copy the selected version's server download URL to the clipboard."""
+        record = self._get_selected_record()
+        if not record:
+            return
+        self._put_url_on_clipboard(record.version)
+
+    def _put_url_on_clipboard(self, version: str) -> None:
+        url = build_download_url(self.product_def, version)
+        if not url:
+            messagebox.showerror(
+                APP_NAME,
+                f"No download URL is configured for {self.product_def.display_name}.",
+            )
+            return
+        self.clipboard_clear()
+        self.clipboard_append(url)
+        self._set_status(f"Copied download URL for {version}")
+        self._show_toast("Download URL copied to clipboard")
+
+    def _show_toast(self, message: str, duration_ms: int = 2200) -> None:
+        """Show a small self-dismissing notification near the window's corner."""
+        toast = tk.Toplevel(self)
+        toast.overrideredirect(True)
+        toast.attributes("-topmost", True)
+        try:
+            toast.attributes("-alpha", 0.0)
+        except tk.TclError:
+            pass
+
+        frame = tk.Frame(toast, bg=ACCENT, highlightthickness=1,
+                         highlightbackground="#1a8ad4")
+        frame.pack(fill=tk.BOTH, expand=True)
+        tk.Label(frame, text=message, bg=ACCENT, fg=FG_BRIGHT,
+                 font=("Segoe UI", 10), padx=16, pady=10).pack()
+
+        toast.update_idletasks()
+        self.update_idletasks()
+        tw, th = toast.winfo_width(), toast.winfo_height()
+        x = self.winfo_rootx() + self.winfo_width() - tw - 24
+        y = self.winfo_rooty() + self.winfo_height() - th - 24
+        toast.geometry(f"+{x}+{y}")
+
+        def _fade(alpha: float, delta: float) -> None:
+            alpha += delta
+            try:
+                toast.attributes("-alpha", max(0.0, min(alpha, 1.0)))
+            except tk.TclError:
+                return
+            if delta > 0 and alpha < 1.0:
+                toast.after(15, lambda: _fade(alpha, delta))
+            elif delta < 0:
+                if alpha <= 0.0:
+                    toast.destroy()
+                else:
+                    toast.after(15, lambda: _fade(alpha, delta))
+
+        _fade(0.0, 0.15)
+        toast.after(duration_ms, lambda: _fade(1.0, -0.12))
+
+    # ------------------------------------------------------------------ download on demand
+    def _on_list_double_click(self, event: object) -> str:
+        """Double-clicking an 'available' row downloads it immediately."""
+        record = self.catalog.get(self.selected_version) if self.selected_version else None
+        if record and record.status == "available":
+            self._download_available_selected()
+        return "break"
+
+    def _download_available_selected(self) -> None:
+        record = self._get_selected_record()
+        if not record:
+            return
+        version = record.version
+        url = build_download_url(self.product_def, version)
+        if not url:
+            messagebox.showerror(
+                APP_NAME,
+                f"No download URL is configured for {self.product_def.display_name}.",
+            )
+            return
+
+        self._set_status(f"Downloading {version}…  (do not close)")
+        self.update_idletasks()
+        _catalog = self.catalog
+        _paths = self.paths
+        _product_key = self.current_product_key
+
+        def _worker() -> None:
+            tmp_path = Path(tempfile.gettempdir()) / f"{safe_version_slug(version)}_{os.getpid()}.msi"
+            try:
+                msi_ops.download_msi(url, tmp_path)
+                self.after(0, lambda: self._on_available_downloaded(
+                    version, tmp_path, _catalog, _paths, _product_key))
+            except Exception as exc:  # noqa: BLE001 - surfaced to the user
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except OSError:
+                    pass
+                self.after(0, lambda e=exc: self._on_download_failed(version, url, e))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_available_downloaded(
+        self,
+        version: str,
+        tmp_path: Path,
+        catalog: "CatalogStore",
+        paths,
+        product_key: str,
+    ) -> None:
+        try:
+            if msi_ops.detect_msi_product_key(tmp_path) is None:
+                messagebox.showerror(
+                    APP_NAME,
+                    f"The download for {version} is not a recognised MSI.",
+                )
+                self._set_status("Download failed")
+                return
+            msi_path = msi_ops.copy_msi_to_store(tmp_path, paths.msi_dir, version)
+            notes_path = msi_ops.ensure_patch_notes_file_beside_msi(msi_path)
+            bug_path = msi_ops.ensure_bug_notes_file(paths.bug_notes_dir, version)
+            record = catalog.get(version)
+            if record:
+                updated = replace(record, status="not_installed", msi_path=str(msi_path),
+                                  notes_path=str(notes_path), bug_notes_path=str(bug_path))
+            else:
+                updated = VersionRecord(
+                    version=version, msi_path=str(msi_path),
+                    notes_path=str(notes_path), bug_notes_path=str(bug_path),
+                )
+            catalog.upsert(updated)
+        finally:
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+
+        if product_key == self.current_product_key:
+            self.selected_version = version
+            self._refresh_list()
+            if version in self._version_order:
+                self._select_list_line(self._version_order.index(version))
+                self._on_select_version(None)
+            self._set_status(f"Downloaded {version}")
+            self._show_toast(f"Downloaded {version}")
+
+    def _on_download_failed(self, version: str, url: str, exc: Exception) -> None:
+        import urllib.error
+
+        if isinstance(exc, urllib.error.HTTPError) and exc.code == 404:
+            message = (
+                f"Version {version} was not found on the server (404).\n\n{url}"
+            )
+        else:
+            message = f"Could not download {version}.\n\n{exc}\n\nURL:\n{url}"
+        self._set_status("Download failed")
+        messagebox.showerror(APP_NAME, message)
+
+    # ------------------------------------------------------------------ check for updates
+    def _check_for_updates(self) -> None:
+        """Walk the server forward from the newest known version, add anything
+        new as 'available', and offer to download the latest."""
+        self._check_updates_btn.configure(state="disabled")
+        self._set_status(f"Checking for {self.product_def.display_name} updates…")
+        product = self.product_def
+        _catalog = self.catalog
+        _product_key = self.current_product_key
+
+        records = _catalog.all_versions()
+        from_version = (
+            max((r.version for r in records), key=_version_key)
+            if records else "0.0.0.0"
+        )
+
+        def _worker() -> None:
+            versions = discover_newer_versions(
+                product.download_base_url, product.download_file_prefix, from_version)
+            self.after(0, lambda: self._on_updates_checked(versions, _catalog, _product_key))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_updates_checked(
+        self, versions: list[str], catalog: "CatalogStore", product_key: str,
+    ) -> None:
+        if product_key == self.current_product_key:
+            self._check_updates_btn.configure(state="normal")
+
+        # Fold any newly-discovered versions into the catalog as available.
+        for version in versions:
+            if catalog.get(version) is None:
+                catalog.upsert(VersionRecord(version=version, status="available"))
+
+        if product_key != self.current_product_key:
+            return
+
+        all_recs = catalog.all_versions()
+        if not all_recs:
+            self._refresh_list()
+            self._show_toast("No versions found on the server")
+            return
+
+        newest = max((r.version for r in all_recs), key=_version_key)
+        owned = [r.version for r in all_recs if r.status in ("installed", "not_installed")]
+        newest_owned = max(owned, key=_version_key) if owned else None
+        update_available = (
+            newest_owned is None or _version_key(newest) > _version_key(newest_owned)
+        )
+
+        if update_available:
+            self.selected_version = newest
+        self._refresh_list()
+
+        if update_available:
+            # Just add the newer version to the list (greyed out) and reveal it;
+            # the user downloads/installs when they choose.
+            if newest in self._version_order:
+                self._select_list_line(self._version_order.index(newest))
+                self._on_select_version(None)
+            self._set_status(f"Update available: {newest} — added to list")
+            self._show_toast(f"{newest} available — added to list")
+        else:
+            self._set_status(f"Up to date ({newest_owned})")
+            self._show_toast("You're up to date")
 
     # ------------------------------------------------------------------ install/launch
     @staticmethod

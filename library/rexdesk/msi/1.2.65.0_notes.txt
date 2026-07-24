@@ -1,0 +1,2 @@
+Bundled firmware: v3.88.8
+No firmware changes from v1.2.64.0 - same firmware version.

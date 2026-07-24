@@ -19,17 +19,38 @@ class ProductDef:
     logo_svg: str
     # Public docs page where the download link lives (empty = skip web check).
     download_page_url: str = ""
+    # Direct-download server. The MSI URL is built as:
+    #   {download_base_url}/{download_file_prefix}_{version}.msi
+    # e.g. https://downloads.influxtechnology.com/ReXdesk/ReXdesk_1.2.65.0.msi
+    download_base_url: str = "https://downloads.influxtechnology.com/ReXdesk"
+    download_file_prefix: str = ""
 
 PRODUCTS: dict[str, ProductDef] = {
     "rexdesk": ProductDef(
         "rexdesk", "Rexdesk", "rexdesk", "rexdesk.svg",
         download_page_url="https://docs.influxtechnology.com/support_guides/software-links/software-links/rexdesk-software-links",
+        download_file_prefix="ReXdesk",
     ),
-    "rexbridge": ProductDef("rexbridge", "Rexbridge", "rexbridge", "rexbridge.svg"),
+    "rexbridge": ProductDef(
+        "rexbridge", "Rexbridge", "rexbridge", "rexbridge.svg",
+        download_file_prefix="ReXbridge",
+    ),
 }
 
 PRODUCT_KEYS: list[str] = list(PRODUCTS.keys())
 DEFAULT_PRODUCT = "rexdesk"
+
+
+def build_download_url(product: ProductDef, version: str) -> str | None:
+    """Build the direct MSI download URL for *version*, or None if unavailable.
+
+    Mirrors the server layout, e.g. version '1.2.65.0' for Rexdesk becomes
+    https://downloads.influxtechnology.com/ReXdesk/ReXdesk_1.2.65.0.msi
+    """
+    version = version.strip()
+    if not product.download_file_prefix or not product.download_base_url or not version:
+        return None
+    return f"{product.download_base_url.rstrip('/')}/{product.download_file_prefix}_{version}.msi"
 
 
 def safe_version_slug(version_label: str) -> str:

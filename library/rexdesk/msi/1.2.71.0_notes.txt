@@ -1,0 +1,26 @@
+Bundled firmware: v3.89.4
+
+v3.89.3 - 2026-06-05
+  Added
+  - Configurable signal filtering for moving-average, median, low-pass, and high-pass processing.
+  - Signal operations for difference, derivative, integration, and accumulation of configured inputs.
+  - Acceleration impact output as a combined magnitude from all acceleration axes.
+  - Filtered and operated signal values can now be used in live output and logging paths.
+  Changed
+  - Trigger reactivation delay handling now applies to new activations while allowing the first valid activation through.
+  - SD logging interface state is now published as an output when the enabled state changes.
+  - Configuration validation extended for the new signal filter/operator entries and required identifiers.
+
+v3.89.4 - 2026-06-16
+  Added
+  - LIN communication can now use either physical LIN interface or both at the same time.
+  - Configurations can now define two LIN interfaces on supported hardware.
+  Changed
+  - LIN master scheduling and slave response handling now operate independently for each physical LIN interface.
+  - LIN transceivers now remain inactive until LIN communication is configured.
+  - Secondary physical LIN initialization is now prepared on supported hardware variants.
+  Fixed
+  - LIN receive handling now keeps traffic separated by physical interface to prevent frames from one LIN bus being processed by the other.
+  - Secondary communication interface ownership is preserved when configured for LIN use.
+  - Snapshot handling corrected so GNSS date and time data remain consistent in the affected flow.
+  - GNSS datetime handling corrected so date and time values remain consistent in reported data.

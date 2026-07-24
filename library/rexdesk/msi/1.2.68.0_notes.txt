@@ -1,0 +1,41 @@
+Bundled firmware: v3.89.1
+
+v3.88.9 - 2026-03-10
+  Changed
+  - Gate import configuration handling updated so the secondary parameter supports a wider value range.
+
+v3.88.10 - 2026-04-20
+  Fixed
+  - S3 upload reliability issue fixed.
+
+v3.88.11 - 2026-04-29
+  Added
+  - MCU temperature internal parameter support for live data and logging.
+  - XCP seed/key message mapping support.
+  Changed
+  - GNSS-to-CAN output handling updated, including GNSS datetime value typing.
+  - FLOAT64 CAN signal conversion precision improved for high-precision signals such as latitude/longitude.
+  - Configuration schema extended for XCP, MCU/IMU temperature parameters, and orientation/enclosure options.
+  Fixed
+  - AWS S3 multipart upload recovery now handles invalid or missing UploadID states (including 404/NoSuchUpload).
+
+v3.88.12 - 2026-04-30
+  Added
+  - Forced normal-sleep command handling added to the USB command path.
+  Changed
+  - Forced sleep routing now follows the configured sleep mode selection (normal sleep or deep sleep).
+  Fixed
+  - SMART board forced normal-sleep flow now correctly applies modem and Linux power-down sequencing.
+
+v3.89.1 - 2026-05-22
+  Added
+  - IMU temperature internal parameter now reports measured sensor temperature on supported IMU devices.
+  Changed
+  - Logging and pre-buffer control updated to operate per partition, including per-partition timing, state transitions, and buffer handling.
+  - IMU initialization flow now activates when IMU temperature measurement is configured, even if accelerometer/gyroscope channels are not used.
+  - GNSS sampling timestamp handling aligned so extracted GNSS values in the same cycle share a consistent capture timestamp.
+  Fixed
+  - Trigger first-value initialization for message-driven triggers corrected to use the active trigger instance state.
+  - SD interface processing guards improved for partition-based logging control to reduce invalid partition-path execution.
+  - Default LED block initialization now clears input value pointers to prevent stale pointer usage.
+  - Internal parameter processing now preserves imported output identity fields and maps IMU temperature output to actual sensor reading.

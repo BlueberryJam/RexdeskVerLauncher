@@ -11,7 +11,7 @@ echo.
 set "PY_VER=3.12.7"
 
 set "TOTAL_STEPS=9"
-set "REBUILD_EXE=Y"
+set "REBUILD_EXE=N"
 call :show_stage 0 "Starting setup"
 
 :: ════════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,56 @@
+Bundled firmware: v3.88.8
+
+v3.88.2 - 2026-01-23
+  Added
+  - Communication feature set expanded across CAN/LIN/USB processing paths.
+  Changed
+  - Counter logic adjustments.
+  - LED behavior for default CAN activity refined.
+  - Signal conversion behavior updated.
+  Fixed
+  - Gate logic issue related to signal conversion fixed.
+
+v3.88.3 - 2026-02-05
+  Added
+  - TLS crypto configuration updated for newer toolchain compatibility.
+  Changed
+  - Firmware compatibility updated for newer toolchain/runtime conditions.
+  Fixed
+  - Rare crash issue with Rexdesk during LiveData combined with operations like sending configuration or SD format.
+  Security
+  - TLS configuration hardening updates.
+
+v3.88.4 - 2026-02-25
+  Added
+  - J2534 CAN FD support.
+  - XCP configuration restart behavior.
+  - Multiple high-rate CAN TX handling improvements.
+  Changed
+  - Runtime communication behavior and initialization flow updated for better reliability.
+  Fixed
+  - CAN initialization/start sequence adjusted for more reliable bring-up.
+
+v3.88.5 - 2026-02-27
+  Added
+  - Explicit data update control added to IMU initialization.
+  Changed
+  - IMU read path refactored to use burst SPI transfers with lower bus overhead.
+  - Communication-related runtime logic reviewed and cleaned up.
+  Removed
+  - Legacy IMU helper routines removed after refactor.
+  Fixed
+  - Improved accelerometer/gyroscope raw read robustness and data consistency.
+
+v3.88.6 - 2026-03-02
+  Changed
+  - LARA LTE communication initialization flow adjusted for internal validation of modem bring-up.
+
+v3.88.7 - 2026-03-02
+  Added
+  - Thermal management handling added for LARA modem startup.
+  Changed
+  - LTE initialization order updated so thermal handling is applied earlier in modem bring-up.
+
+v3.88.8 - 2026-03-05
+  Fixed
+  - IMU orientation handling corrected to prevent wrong orientation values caused by memory definition mismatch.

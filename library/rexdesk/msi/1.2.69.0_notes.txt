@@ -1,0 +1,8 @@
+Bundled firmware: v3.89.2
+
+v3.89.2 - 2026-06-04
+  Added
+  - MinIO uploads now support both plain and SSL communication.
+  Fixed
+  - Snapshot handling issue fixed.
+  - Movement wake-up after deep sleep restored for configurations that use pre-acceleration deep sleep.

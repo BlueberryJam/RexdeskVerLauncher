@@ -2,21 +2,17 @@
 
 So you can have multiple versions of Rexdesk installed on a PC for testing.
 
-Version data is shared by the BAT launcher and EXE under `library/` in this folder.
+Version data is stored under `library/` in this folder. New releases are
+discovered and downloaded directly from the Influx download server, so there is
+no longer a bundled executable to keep in sync.
 
 ## Quick Start
 
 Double-click `Install-and-Run.bat`.
 
-That script creates a local Python virtual environment, installs dependencies, and launches the app.
-It also creates `Rexdesk Version Manager.exe` in this folder.
-
-## For End Users (No Python Required)
-
-Use GitHub Releases and download:
-
-- `Rexdesk-Version-Manager-Setup.exe` (recommended installer)
-- or `Rexdesk Version Manager.exe` (portable EXE)
+That script creates a local Python virtual environment, installs dependencies,
+and launches the app. To start it again later without re-running setup, use
+`Launch Rexdesk Version Manager.bat`.
 
 ## Project Docs
 

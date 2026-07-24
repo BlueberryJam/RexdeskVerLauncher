@@ -251,6 +251,44 @@ def export_msi_copy(msi_path: Path, destination_dir: Path) -> Path:
     return target
 
 
+# MSI/OLE compound-document magic number — lets us reject HTML error pages that
+# some servers return with a 200 status instead of a real 404.
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def download_msi(url: str, dest_path: Path, *, timeout: int = 60) -> Path:
+    """Download an MSI from *url* to *dest_path*.
+
+    Raises urllib.error.HTTPError (e.g. 404 for an unknown version), URLError on
+    network failure, or ValueError if the downloaded content is not an MSI.
+    """
+    import urllib.request
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "RexdeskVersionManager/1"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with open(dest_path, "wb") as fh:
+            shutil.copyfileobj(resp, fh, length=256 * 1024)
+
+    try:
+        with open(dest_path, "rb") as fh:
+            head = fh.read(8)
+    except OSError:
+        head = b""
+    if head != _OLE_MAGIC:
+        try:
+            dest_path.unlink()
+        except OSError:
+            pass
+        raise ValueError(
+            "The downloaded file is not a valid MSI "
+            "(the version may not exist on the server)."
+        )
+    return dest_path
+
+
 def open_in_explorer(target_path: Path) -> None:
     if not target_path.exists():
         raise FileNotFoundError(target_path)

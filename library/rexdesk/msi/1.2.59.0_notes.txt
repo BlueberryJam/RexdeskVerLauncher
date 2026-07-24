@@ -1,0 +1,5 @@
+Bundled firmware: v3.88.1
+
+v3.88.1 - 2026-01-23
+  Changed
+  - Additional runtime performance optimizations applied.
