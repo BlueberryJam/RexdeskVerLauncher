@@ -37,3 +37,7 @@ library/*/installs/
 library/*/_backup/
 library/*/*.log
 library/*/catalog.json
+
+# MSI binaries: the app downloads these from the Influx server on demand,
+# so they are no longer committed. The accompanying notes are still tracked.
+library/*/msi/*.msi
