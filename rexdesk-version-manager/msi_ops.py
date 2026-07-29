@@ -5,12 +5,14 @@ import ctypes.wintypes
 import base64
 import hashlib
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
-from typing import Iterable
+import tempfile
+from typing import Iterable, Iterator
 
 from config import safe_version_slug
 
@@ -458,6 +460,64 @@ def unshelter_install_dirs(moved: list[tuple[Path, Path]]) -> list[tuple[Path, P
     return failed
 
 
+_STAGE_ROOT_NAME = "RexdeskVerLauncher"
+
+
+def _staging_dir() -> Path:
+    """Local directory whose contents every Windows Installer identity can read.
+
+    ProgramData is preferred because it grants read access to SYSTEM and to all
+    administrators; the user's temp dir is only a fallback.
+    """
+    for base in (os.environ.get("ProgramData"),
+                 os.environ.get("ALLUSERSPROFILE"),
+                 tempfile.gettempdir()):
+        if not base:
+            continue
+        stage = Path(base) / _STAGE_ROOT_NAME / "staging"
+        try:
+            stage.mkdir(parents=True, exist_ok=True)
+            return stage
+        except OSError:
+            continue
+    raise OSError("No writable staging directory found.")
+
+
+@contextmanager
+def _staged_package(msi_path: Path) -> Iterator[Path]:
+    """Yield a path to *msi_path* that the elevated msiexec can definitely open.
+
+    Windows Installer performs part of every install through its service, which
+    runs as SYSTEM, and UAC may satisfy elevation with a different account.
+    Neither identity can hydrate a cloud-sync placeholder or read another
+    user's profile, so a package sitting in e.g. OneDrive fails to open with
+    exit code 1619. Copying it here first both moves it somewhere readable and
+    forces the placeholder to hydrate under our own token.
+    """
+    staged: Path | None = None
+    try:
+        staged = _staging_dir() / msi_path.name
+        shutil.copy2(msi_path, staged)
+    except OSError:
+        # Staging is an optimisation; if it fails, let msiexec try the original
+        # path and report whatever it makes of it.
+        if staged is not None:
+            try:
+                staged.unlink()
+            except OSError:
+                pass
+        yield msi_path
+        return
+
+    try:
+        yield staged
+    finally:
+        try:
+            staged.unlink()
+        except OSError:
+            pass
+
+
 def install_with_msiexec(
     msi_path: Path,
     install_dir: Path,
@@ -465,18 +525,19 @@ def install_with_msiexec(
     extra_properties: Iterable[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     install_dir.mkdir(parents=True, exist_ok=True)
-    params = [
-        "/i",
-        str(msi_path),
-        f"INSTALLDIR={install_dir}",
-        f"TARGETDIR={install_dir}",
-        "/qn",
-        "/L*v",
-        str(log_path),
-    ]
-    if extra_properties:
-        params.extend(extra_properties)
-    returncode = _run_elevated(params)
+    with _staged_package(msi_path) as package:
+        params = [
+            "/i",
+            str(package),
+            f"INSTALLDIR={install_dir}",
+            f"TARGETDIR={install_dir}",
+            "/qn",
+            "/L*v",
+            str(log_path),
+        ]
+        if extra_properties:
+            params.extend(extra_properties)
+        returncode = _run_elevated(params)
     return subprocess.CompletedProcess(args=params, returncode=returncode)
 
 
@@ -484,12 +545,13 @@ def uninstall_with_msiexec(
     msi_path: Path,
     log_path: Path,
 ) -> subprocess.CompletedProcess[str]:
-    params = [
-        "/x",
-        str(msi_path),
-        "/qn",
-        "/L*v",
-        str(log_path),
-    ]
-    returncode = _run_elevated(params)
+    with _staged_package(msi_path) as package:
+        params = [
+            "/x",
+            str(package),
+            "/qn",
+            "/L*v",
+            str(log_path),
+        ]
+        returncode = _run_elevated(params)
     return subprocess.CompletedProcess(args=params, returncode=returncode)

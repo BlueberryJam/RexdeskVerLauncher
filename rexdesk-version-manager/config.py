@@ -58,6 +58,22 @@ def safe_version_slug(version_label: str) -> str:
     return cleaned.strip("._-") or "unknown_version"
 
 
+_CLOUD_FOLDER_MARKERS = ("onedrive", "dropbox", "google drive", "icloud")
+
+
+def is_cloud_synced_path(path: Path) -> bool:
+    """True when *path* sits inside a folder managed by a cloud-sync client.
+
+    Files there can be on-demand placeholders, which Windows Installer cannot
+    hydrate, and sync locks interfere with installs writing into the folder.
+    """
+    return any(
+        marker in part.lower()
+        for part in Path(path).parts
+        for marker in _CLOUD_FOLDER_MARKERS
+    )
+
+
 @dataclass(frozen=True)
 class Paths:
     app_root: Path

@@ -16,12 +16,14 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from catalog import CatalogStore, VersionRecord
 from config import (
     APP_NAME, DEFAULT_PRODUCT, PRODUCTS, PRODUCT_KEYS, ProductDef,
-    assets_dir, build_download_url, ensure_layout, migrate_legacy_library,
-    resolve_paths, safe_version_slug,
+    assets_dir, build_download_url, ensure_layout, is_cloud_synced_path,
+    migrate_legacy_library, resolve_paths, safe_version_slug,
 )
 from logo_assets import load_product_logo
 import msi_ops
-from web_check import discover_newer_versions, fetch_live_version
+from web_check import (
+    discover_all_versions, discover_newer_versions, fetch_live_version,
+)
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -1395,8 +1397,8 @@ class RexdeskVersionManager(BaseTk):
 
     # ------------------------------------------------------------------ check for updates
     def _check_for_updates(self) -> None:
-        """Walk the server forward from the newest known version, add anything
-        new as 'available', and offer to download the latest."""
+        """Scan the server for every version it holds and add anything missing
+        from the catalog as 'available'."""
         self._check_updates_btn.configure(state="disabled")
         self._set_status(f"Checking for {self.product_def.display_name} updates…")
         product = self.product_def
@@ -1410,8 +1412,19 @@ class RexdeskVersionManager(BaseTk):
         )
 
         def _worker() -> None:
+            def _progress(line: str) -> None:
+                if _product_key == self.current_product_key:
+                    self.after(0, lambda: self._set_status(f"Scanning server… {line}"))
+
+            # The forward walk runs first so a brand-new release shows up
+            # quickly; the full scan then backfills the release history, which
+            # the forward walk cannot see because it only looks past the newest
+            # version already in the catalog.
             versions = discover_newer_versions(
                 product.download_base_url, product.download_file_prefix, from_version)
+            versions += discover_all_versions(
+                product.download_base_url, product.download_file_prefix,
+                progress=_progress)
             self.after(0, lambda: self._on_updates_checked(versions, _catalog, _product_key))
 
         threading.Thread(target=_worker, daemon=True).start()
@@ -1423,9 +1436,11 @@ class RexdeskVersionManager(BaseTk):
             self._check_updates_btn.configure(state="normal")
 
         # Fold any newly-discovered versions into the catalog as available.
+        added = 0
         for version in versions:
             if catalog.get(version) is None:
                 catalog.upsert(VersionRecord(version=version, status="available"))
+                added += 1
 
         if product_key != self.current_product_key:
             return
@@ -1455,6 +1470,9 @@ class RexdeskVersionManager(BaseTk):
                 self._on_select_version(None)
             self._set_status(f"Update available: {newest} — added to list")
             self._show_toast(f"{newest} available — added to list")
+        elif added:
+            self._set_status(f"Up to date ({newest_owned}); {added} more version(s) on the server")
+            self._show_toast(f"Found {added} more version(s) on the server")
         else:
             self._set_status(f"Up to date ({newest_owned})")
             self._show_toast("You're up to date")
@@ -1606,7 +1624,23 @@ class RexdeskVersionManager(BaseTk):
             f"Install failed for {record.version}.\n"
             f"Exit code: {returncode}\nLog: {log_path}\n"
             "MSI remains archived for reinstall later."
+            + self._cloud_folder_hint()
         ))
+
+    def _cloud_folder_hint(self) -> str:
+        """Extra advice appended to install/uninstall failures when this copy of
+        the app lives in a cloud-synced folder, which Windows Installer cannot
+        reliably read from or write into."""
+        if not is_cloud_synced_path(self.paths.app_root):
+            return ""
+        return (
+            "\n\nThis copy of the version manager is running from a cloud-synced "
+            f"folder:\n{self.paths.app_root}\n\n"
+            "Windows Installer cannot open installers that are still cloud-only "
+            "placeholders, and sync locks can break installs. Move the whole "
+            "RexdeskVerLauncher folder to a local path such as "
+            "C:\\RexdeskVerLauncher and run it from there."
+        )
 
     def _uninstall_selected(self) -> None:
         record = self._get_selected_record()
@@ -1705,8 +1739,10 @@ class RexdeskVersionManager(BaseTk):
                 )
             return
 
-        messagebox.showwarning(APP_NAME,
-                               f"Uninstall failed (exit {returncode}).\nLog: {log_path}")
+        messagebox.showwarning(
+            APP_NAME,
+            f"Uninstall failed (exit {returncode}).\nLog: {log_path}"
+            + self._cloud_folder_hint())
         if same_product:
             self._set_status("")
 
