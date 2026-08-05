@@ -188,7 +188,8 @@ def uninstall_product_code(
 
 
 def detect_msi_product_key(msi_path: Path) -> str | None:
-    """Return 'rexdesk', 'rexbridge', or None based on the MSI's ProductName property."""
+    """Return 'rexdesk', 'rexbridge', 'kcal', or None based on the MSI's
+    ProductName property."""
     try:
         name = _read_msi_property(msi_path, "ProductName")
     except Exception:
@@ -196,10 +197,14 @@ def detect_msi_product_key(msi_path: Path) -> str | None:
     if not name:
         return None
     name_lower = name.lower()
+    # Punctuation-insensitive form so "InfluxKCal" and "K-Cal" both match "kcal".
+    compact = re.sub(r"[^a-z0-9]+", "", name_lower)
     if "rexdesk" in name_lower:
         return "rexdesk"
     if "rexbridge" in name_lower:
         return "rexbridge"
+    if "kcal" in compact:
+        return "kcal"
     return None
 
 

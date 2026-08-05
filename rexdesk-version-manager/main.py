@@ -119,6 +119,8 @@ class RexdeskVersionManager(BaseTk):
         self._autosave_bug_id: str | None = None
         self._autosave_date_id: str | None = None
         self._loading_notes = False
+        self._spinner_after_id: str | None = None
+        self._spinner_idx = 0
 
         self._set_window_icon()
         self._apply_theme()
@@ -287,6 +289,13 @@ class RexdeskVersionManager(BaseTk):
         self.version_list.configure(yscrollcommand=scrollbar.set)
         self.version_list.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
+
+        # Spinner overlay shown over the list while the server is being scanned.
+        # Placed (not gridded) so it floats above the list without reflowing it.
+        self._spinner_label = tk.Label(
+            list_frame, text="", bg=BG_DARK, fg=ACCENT,
+            font=("Segoe UI", 11),
+        )
         self.version_list.bind("<Button-1>", self._on_list_click)
         self.version_list.bind("<Double-Button-1>", self._on_list_double_click)
         self.version_list.bind("<Up>", self._on_list_key_up)
@@ -550,6 +559,33 @@ class RexdeskVersionManager(BaseTk):
 
     def _set_status(self, text: str) -> None:
         self.status_var.set(text)
+
+    # ------------------------------------------------------------------ scan spinner
+    _SPINNER_FRAMES = "◐◓◑◒"
+
+    def _start_spinner(self, message: str = "Scanning server…") -> None:
+        """Float an animated spinner over the version list to show work is
+        happening during a server scan."""
+        self._spinner_message = message
+        self._spinner_label.place(relx=0.5, y=10, anchor="n")
+        self._spinner_label.lift()
+        if self._spinner_after_id is None:
+            self._animate_spinner()
+
+    def _animate_spinner(self) -> None:
+        frame = self._SPINNER_FRAMES[self._spinner_idx % len(self._SPINNER_FRAMES)]
+        self._spinner_idx += 1
+        self._spinner_label.configure(text=f"{frame}  {self._spinner_message}")
+        self._spinner_after_id = self.after(120, self._animate_spinner)
+
+    def _set_spinner_message(self, message: str) -> None:
+        self._spinner_message = message
+
+    def _stop_spinner(self) -> None:
+        if self._spinner_after_id is not None:
+            self.after_cancel(self._spinner_after_id)
+            self._spinner_after_id = None
+        self._spinner_label.place_forget()
 
     # ------------------------------------------------------------------ drag-drop
     def _install_tkinterdnd2(self) -> None:
@@ -1401,6 +1437,7 @@ class RexdeskVersionManager(BaseTk):
         from the catalog as 'available'."""
         self._check_updates_btn.configure(state="disabled")
         self._set_status(f"Checking for {self.product_def.display_name} updates…")
+        self._start_spinner(f"Scanning for {self.product_def.display_name} versions…")
         product = self.product_def
         _catalog = self.catalog
         _product_key = self.current_product_key
@@ -1415,16 +1452,21 @@ class RexdeskVersionManager(BaseTk):
             def _progress(line: str) -> None:
                 if _product_key == self.current_product_key:
                     self.after(0, lambda: self._set_status(f"Scanning server… {line}"))
+                    self.after(0, lambda: self._set_spinner_message(f"Scanning server… {line}"))
 
             # The forward walk runs first so a brand-new release shows up
             # quickly; the full scan then backfills the release history, which
             # the forward walk cannot see because it only looks past the newest
             # version already in the catalog.
+            scan_major = product.version_major or None
             versions = discover_newer_versions(
-                product.download_base_url, product.download_file_prefix, from_version)
+                product.download_base_url, product.download_file_prefix, from_version,
+                sep=product.version_sep, scheme=product.version_scheme,
+                major=scan_major)
             versions += discover_all_versions(
                 product.download_base_url, product.download_file_prefix,
-                progress=_progress)
+                progress=_progress, sep=product.version_sep,
+                scheme=product.version_scheme, major=scan_major)
             self.after(0, lambda: self._on_updates_checked(versions, _catalog, _product_key))
 
         threading.Thread(target=_worker, daemon=True).start()
@@ -1432,6 +1474,7 @@ class RexdeskVersionManager(BaseTk):
     def _on_updates_checked(
         self, versions: list[str], catalog: "CatalogStore", product_key: str,
     ) -> None:
+        self._stop_spinner()
         if product_key == self.current_product_key:
             self._check_updates_btn.configure(state="normal")
 

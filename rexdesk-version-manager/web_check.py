@@ -48,6 +48,12 @@ def fetch_live_version(page_url: str) -> Optional[str]:
     return None
 
 
+def _msi_url(base: str, file_prefix: str, version: str, sep: str) -> str:
+    """Build a server MSI URL, e.g. ``.../ReXdesk/ReXdesk_1.2.37.0.msi`` (sep '_')
+    or ``.../K-Box/InfluxKCal.3.45.msi`` (sep '.')."""
+    return f"{base.rstrip('/')}/{file_prefix}{sep}{version}.msi"
+
+
 def _msi_exists(url: str) -> bool:
     """Return True if *url* responds 200 to a HEAD request."""
     req = urllib.request.Request(
@@ -66,6 +72,9 @@ def discover_newer_versions(
     from_version: str,
     *,
     gap: int = _GAP_TOLERANCE,
+    sep: str = "_",
+    scheme: str = "quad",
+    major: int | None = None,
 ) -> list[str]:
     """Find versions newer than *from_version* by walking version numbers forward.
 
@@ -75,6 +84,9 @@ def discover_newer_versions(
     server (e.g. a missing 1.2.32) are jumped but the walk still terminates
     soon after the newest release.  Returns the versions that exist, oldest
     first.
+
+    *scheme* selects the version shape: ``"quad"`` (a.b.c.0) or ``"duo"``
+    (``<major>.<minor>`` on the single line given by *major*, e.g. K-CAL 3.x).
     """
     if not base_url or not file_prefix:
         return []
@@ -82,7 +94,29 @@ def discover_newer_versions(
     base = base_url.rstrip("/")
 
     def exists(version: str) -> bool:
-        return _msi_exists(f"{base}/{file_prefix}_{version}.msi")
+        return _msi_exists(_msi_url(base, file_prefix, version, sep))
+
+    if scheme == "duo":
+        try:
+            parts = [int(p) for p in from_version.split(".")]
+        except ValueError:
+            parts = []
+        maj = major if major is not None else (parts[0] if parts else 0)
+        # Continue past the newest known minor only when it is on our line;
+        # otherwise (e.g. a fresh "0.0.0.0") start at the bottom of the line.
+        start_minor = parts[1] + 1 if len(parts) >= 2 and parts[0] == maj else 0
+        found = []
+        misses = 0
+        m = start_minor
+        while misses < gap and (m - start_minor) < _MAX_PROBES_PER_LINE:
+            version = f"{maj}.{m}"
+            if exists(version):
+                found.append(version)
+                misses = 0
+            else:
+                misses += 1
+            m += 1
+        return found
 
     try:
         parts = [int(p) for p in from_version.split(".")]
@@ -136,6 +170,9 @@ def discover_all_versions(
     *,
     start_major: int = 1,
     progress: Optional[Callable[[str], None]] = None,
+    sep: str = "_",
+    scheme: str = "quad",
+    major: int | None = None,
 ) -> list[str]:
     """Enumerate every version the server holds, oldest first.
 
@@ -159,8 +196,23 @@ def discover_all_versions(
         def probe_batch(versions: list[str]) -> list[str]:
             nonlocal probes
             probes += len(versions)
-            urls = [f"{base}/{file_prefix}_{v}.msi" for v in versions]
+            urls = [_msi_url(base, file_prefix, v, sep) for v in versions]
             return [v for v, ok in zip(versions, pool.map(_msi_exists, urls)) if ok]
+
+        if scheme == "duo":
+            maj = major if major is not None else start_major
+            minor = 0
+            while probes < _MAX_SCAN_PROBES:
+                if progress:
+                    progress(f"{maj}.x")
+                batch = [f"{maj}.{m}" for m in range(minor, minor + _SCAN_BATCH)]
+                hits = probe_batch(batch)
+                found.extend(hits)
+                minor += _SCAN_BATCH
+                if not hits:
+                    break
+            found.sort(key=_version_sort_key)
+            return found
 
         major = start_major
         while probes < _MAX_SCAN_PROBES:

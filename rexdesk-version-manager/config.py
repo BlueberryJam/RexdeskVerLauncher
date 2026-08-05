@@ -20,10 +20,21 @@ class ProductDef:
     # Public docs page where the download link lives (empty = skip web check).
     download_page_url: str = ""
     # Direct-download server. The MSI URL is built as:
-    #   {download_base_url}/{download_file_prefix}_{version}.msi
+    #   {download_base_url}/{download_file_prefix}{version_sep}{version}.msi
     # e.g. https://downloads.influxtechnology.com/ReXdesk/ReXdesk_1.2.65.0.msi
     download_base_url: str = "https://downloads.influxtechnology.com/ReXdesk"
     download_file_prefix: str = ""
+    # Character between the file prefix and the version in the MSI filename.
+    # Rexdesk/Rexbridge use "_" (ReXdesk_1.2.65.0.msi); K-CAL uses "."
+    # (InfluxKCal.3.45.msi).
+    version_sep: str = "_"
+    # Version-number shape the server uses, which drives how the update scanner
+    # walks the version space:
+    #   "quad" -> a.b.c.0 (Rexdesk/Rexbridge)
+    #   "duo"  -> <major>.<minor>, a single major line (K-CAL, e.g. 3.45)
+    version_scheme: str = "quad"
+    # For the "duo" scheme, the fixed major line to scan (e.g. 3 for K-CAL).
+    version_major: int = 0
 
 PRODUCTS: dict[str, ProductDef] = {
     "rexdesk": ProductDef(
@@ -34,6 +45,16 @@ PRODUCTS: dict[str, ProductDef] = {
     "rexbridge": ProductDef(
         "rexbridge", "Rexbridge", "rexbridge", "rexbridge.svg",
         download_file_prefix="ReXbridge",
+    ),
+    "kcal": ProductDef(
+        "kcal", "K-CAL", "kcal", "",
+        # K-CAL shares the K-Series docs page with K-Log, so auto-parsing that
+        # page would report the wrong product's version. Leave the web check off.
+        download_base_url="https://downloads.influxtechnology.com/K-Box",
+        download_file_prefix="InfluxKCal",
+        version_sep=".",
+        version_scheme="duo",
+        version_major=3,
     ),
 }
 
@@ -46,11 +67,14 @@ def build_download_url(product: ProductDef, version: str) -> str | None:
 
     Mirrors the server layout, e.g. version '1.2.65.0' for Rexdesk becomes
     https://downloads.influxtechnology.com/ReXdesk/ReXdesk_1.2.65.0.msi
+    and '3.45' for K-CAL becomes
+    https://downloads.influxtechnology.com/K-Box/InfluxKCal.3.45.msi
     """
     version = version.strip()
     if not product.download_file_prefix or not product.download_base_url or not version:
         return None
-    return f"{product.download_base_url.rstrip('/')}/{product.download_file_prefix}_{version}.msi"
+    base = product.download_base_url.rstrip("/")
+    return f"{base}/{product.download_file_prefix}{product.version_sep}{version}.msi"
 
 
 def safe_version_slug(version_label: str) -> str:
