@@ -534,7 +534,11 @@ class RexdeskVersionManager(BaseTk):
         for btn in all_btns:
             btn.pack_forget()
 
-        if record.status == "installed":
+        if self.product_def.local_builds:
+            # Local builds have no MSI: nothing to install, uninstall or download.
+            self.btn_launch.pack(side=tk.LEFT, padx=(0, 6))
+            self.btn_open_folder.pack(side=tk.LEFT)
+        elif record.status == "installed":
             self.btn_launch.pack(side=tk.LEFT, padx=(0, 6))
             self.btn_uninstall.pack(side=tk.LEFT, padx=(0, 6))
             self.btn_reinstall.pack(side=tk.LEFT, padx=(0, 6))
@@ -653,8 +657,48 @@ class RexdeskVersionManager(BaseTk):
         self._set_status(f"Imported {added} MSI file(s)")
 
     # ------------------------------------------------------------------ catalog recovery
+    def _sync_local_builds(self) -> None:
+        """For local-build products, the install folders *are* the version list:
+        every installs/<version>/ holding an exe is a version, and a version
+        whose folder has gone is dropped."""
+        installs = self.paths.installs_dir
+        on_disk: dict[str, Path] = {}
+        try:
+            for d in sorted(installs.iterdir()):
+                if d.is_dir():
+                    exe = self._guess_executable(d)
+                    if exe:
+                        on_disk[d.name] = exe
+        except OSError:
+            return
+        for record in self.catalog.all_versions():
+            if record.version not in on_disk:
+                if self.selected_version == record.version:
+                    self.selected_version = None
+                    self._show_detail(False)
+                self.catalog.remove(record.version)
+        for version, exe in on_disk.items():
+            install_dir = installs / version
+            notes = install_dir / "RELEASE_NOTES.txt"
+            bug_path = self.paths.bug_notes_dir / f"{safe_version_slug(version)}.txt"
+            existing = self.catalog.get(version)
+            record = VersionRecord(
+                version=version,
+                status="installed",
+                install_path=str(install_dir),
+                exe_path=str(exe),
+                notes_path=str(notes) if notes.exists() else "",
+                bug_notes_path=str(bug_path) if bug_path.exists() else "",
+                release_date=existing.release_date if existing else "",
+            )
+            if existing != record:
+                self.catalog.upsert(record)
+
     def _recover_catalog_from_disk(self) -> None:
         """If the catalog is empty, rebuild entries from saved MSI/note files."""
+        if self.product_def.local_builds:
+            self._sync_local_builds()
+            return
         if self.catalog.all_versions():
             return
 
@@ -1435,6 +1479,12 @@ class RexdeskVersionManager(BaseTk):
     def _check_for_updates(self) -> None:
         """Scan the server for every version it holds and add anything missing
         from the catalog as 'available'."""
+        if self.product_def.local_builds:
+            self._refresh_list()
+            self._set_status(
+                f"{self.product_def.display_name} versions are local builds — "
+                "publish one with rexdesk-rs\\tools\\publish-to-launcher.ps1")
+            return
         self._check_updates_btn.configure(state="disabled")
         self._set_status(f"Checking for {self.product_def.display_name} updates…")
         self._start_spinner(f"Scanning for {self.product_def.display_name} versions…")

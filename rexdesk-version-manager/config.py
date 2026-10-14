@@ -35,6 +35,10 @@ class ProductDef:
     version_scheme: str = "quad"
     # For the "duo" scheme, the fixed major line to scan (e.g. 3 for K-CAL).
     version_major: int = 0
+    # Versions are local builds dropped into library/<key>/installs/<version>/
+    # (no MSI, no download server) — e.g. the Rust rewrite, published by
+    # rexdesk-rs/tools/publish-to-launcher.ps1.
+    local_builds: bool = False
 
 PRODUCTS: dict[str, ProductDef] = {
     "rexdesk": ProductDef(
@@ -55,6 +59,11 @@ PRODUCTS: dict[str, ProductDef] = {
         version_sep=".",
         version_scheme="duo",
         version_major=3,
+    ),
+    "rustrewrite": ProductDef(
+        "rustrewrite", "Rust Rewrite", "rexdesk", "rexdesk.svg",
+        download_base_url="",
+        local_builds=True,
     ),
 }
 
