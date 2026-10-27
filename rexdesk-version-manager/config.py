@@ -65,6 +65,12 @@ PRODUCTS: dict[str, ProductDef] = {
         download_base_url="",
         local_builds=True,
     ),
+    # K-Cal rebuilt in Rust; versions published by kcal-rs/tools/publish-to-launcher.ps1.
+    "kcalrust": ProductDef(
+        "kcalrust", "K-CAL Rust Build", "kcal", "",
+        download_base_url="",
+        local_builds=True,
+    ),
 }
 
 PRODUCT_KEYS: list[str] = list(PRODUCTS.keys())
