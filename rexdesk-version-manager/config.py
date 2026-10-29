@@ -71,6 +71,12 @@ PRODUCTS: dict[str, ProductDef] = {
         download_base_url="",
         local_builds=True,
     ),
+    # ReXbridge rebuilt in Rust; versions published by rexbridge-rs/tools/publish-to-launcher.ps1.
+    "rexbridgerust": ProductDef(
+        "rexbridgerust", "ReXbridge Rust Build", "rexbridge", "rexbridge.svg",
+        download_base_url="",
+        local_builds=True,
+    ),
 }
 
 PRODUCT_KEYS: list[str] = list(PRODUCTS.keys())
