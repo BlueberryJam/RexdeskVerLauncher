@@ -482,6 +482,7 @@ class RexdeskVersionManager(BaseTk):
         self._live_website_version = None
         self._show_detail(False)
         self._refresh_list()
+        self._check_updates_btn.configure(state="normal")
         self.title(f"{APP_NAME}  —  {self.product_def.display_name}")
         self._set_status(f"Switched to {self.product_def.display_name}")
         self._refresh_product_logo()
@@ -1480,6 +1481,10 @@ class RexdeskVersionManager(BaseTk):
         """Scan the server for every version it holds and add anything missing
         from the catalog as 'available'."""
         if self.product_def.local_builds:
+            try:
+                self.catalog.load()
+            except (OSError, ValueError):
+                pass
             self._refresh_list()
             self._set_status(
                 f"{self.product_def.display_name} versions are local builds — "
@@ -1525,8 +1530,9 @@ class RexdeskVersionManager(BaseTk):
         self, versions: list[str], catalog: "CatalogStore", product_key: str,
     ) -> None:
         self._stop_spinner()
-        if product_key == self.current_product_key:
-            self._check_updates_btn.configure(state="normal")
+        # Whatever product is shown now: the button was disabled for this scan and, left so
+        # when the user switched products meanwhile, stayed dead until a restart.
+        self._check_updates_btn.configure(state="normal")
 
         # Fold any newly-discovered versions into the catalog as available.
         added = 0
