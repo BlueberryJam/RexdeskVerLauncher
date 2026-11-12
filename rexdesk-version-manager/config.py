@@ -39,6 +39,12 @@ class ProductDef:
     # (no MSI, no download server) — e.g. the Rust rewrite, published by
     # rexdesk-rs/tools/publish-to-launcher.ps1.
     local_builds: bool = False
+    # Local-build products whose builds are also published as GitHub releases
+    # ("owner/name"). Check for Updates lists them; Download fetches the asset
+    # named by github_asset_template ({version} = tag without the leading "v")
+    # and verifies it against the release's SHA256SUMS.txt.
+    github_repo: str = ""
+    github_asset_template: str = ""
 
 PRODUCTS: dict[str, ProductDef] = {
     "rexdesk": ProductDef(
@@ -64,6 +70,8 @@ PRODUCTS: dict[str, ProductDef] = {
         "rustrewrite", "Rust Rewrite", "rexdesk", "rexdesk.svg",
         download_base_url="",
         local_builds=True,
+        github_repo="MadeByDoru/rexdesk-rs",
+        github_asset_template="ReXdesk-Rust-{version}-portable.zip",
     ),
     # K-Cal rebuilt in Rust; versions published by kcal-rs/tools/publish-to-launcher.ps1.
     "kcalrust": ProductDef(

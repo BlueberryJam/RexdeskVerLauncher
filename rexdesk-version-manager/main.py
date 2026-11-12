@@ -19,6 +19,7 @@ from config import (
     assets_dir, build_download_url, ensure_layout, is_cloud_synced_path,
     migrate_legacy_library, resolve_paths, safe_version_slug,
 )
+import github_releases
 from logo_assets import load_product_logo
 import msi_ops
 from web_check import (
@@ -121,6 +122,10 @@ class RexdeskVersionManager(BaseTk):
         self._loading_notes = False
         self._spinner_after_id: str | None = None
         self._spinner_idx = 0
+        # GitHub releases seen by the last Check for Updates, per product.
+        self._github_releases: dict[str, dict[str, github_releases.ReleaseInfo]] = {}
+        # (product key, version) pairs currently downloading from GitHub.
+        self._github_downloads: set[tuple[str, str]] = set()
 
         self._set_window_icon()
         self._apply_theme()
@@ -535,8 +540,11 @@ class RexdeskVersionManager(BaseTk):
         for btn in all_btns:
             btn.pack_forget()
 
-        if self.product_def.local_builds:
-            # Local builds have no MSI: nothing to install, uninstall or download.
+        if self.product_def.local_builds and record.status == "available":
+            # A GitHub release not downloaded yet.
+            self.btn_download_available.pack(side=tk.LEFT, padx=(0, 6))
+        elif self.product_def.local_builds:
+            # Local builds have no MSI: nothing to install or uninstall.
             self.btn_launch.pack(side=tk.LEFT, padx=(0, 6))
             self.btn_open_folder.pack(side=tk.LEFT)
         elif record.status == "installed":
@@ -661,7 +669,8 @@ class RexdeskVersionManager(BaseTk):
     def _sync_local_builds(self) -> None:
         """For local-build products, the install folders *are* the version list:
         every installs/<version>/ holding an exe is a version, and a version
-        whose folder has gone is dropped."""
+        whose folder has gone is dropped. 'available' entries (GitHub releases
+        not downloaded yet) have no folder by design and are kept."""
         installs = self.paths.installs_dir
         on_disk: dict[str, Path] = {}
         try:
@@ -673,7 +682,7 @@ class RexdeskVersionManager(BaseTk):
         except OSError:
             return
         for record in self.catalog.all_versions():
-            if record.version not in on_disk:
+            if record.version not in on_disk and record.status != "available":
                 if self.selected_version == record.version:
                     self.selected_version = None
                     self._show_detail(False)
@@ -1389,6 +1398,9 @@ class RexdeskVersionManager(BaseTk):
         if not record:
             return
         version = record.version
+        if self.product_def.local_builds and self.product_def.github_repo:
+            self._download_github_release(version)
+            return
         url = build_download_url(self.product_def, version)
         if not url:
             messagebox.showerror(
@@ -1485,7 +1497,12 @@ class RexdeskVersionManager(BaseTk):
                 self.catalog.load()
             except (OSError, ValueError):
                 pass
+            # Folders added to installs/ since the list was last built show up now.
+            self._sync_local_builds()
             self._refresh_list()
+            if self.product_def.github_repo:
+                self._check_github_releases()
+                return
             self._set_status(
                 f"{self.product_def.display_name} versions are local builds — "
                 "publish one with rexdesk-rs\\tools\\publish-to-launcher.ps1")
@@ -1575,6 +1592,166 @@ class RexdeskVersionManager(BaseTk):
         else:
             self._set_status(f"Up to date ({newest_owned})")
             self._show_toast("You're up to date")
+
+    # ------------------------------------------------------------------ GitHub releases
+    def _check_github_releases(self) -> None:
+        """List the product's GitHub releases in the background and add any
+        version that isn't in the library as 'available'."""
+        product = self.product_def
+        _catalog = self.catalog
+        _product_key = self.current_product_key
+        self._check_updates_btn.configure(state="disabled")
+        self._set_status(f"Checking GitHub for {product.display_name} releases…")
+        self._start_spinner(f"Checking GitHub for {product.display_name} releases…")
+
+        def _worker() -> None:
+            releases: list[github_releases.ReleaseInfo] = []
+            error = ""
+            try:
+                token = github_releases.get_token()
+                releases = github_releases.list_releases(
+                    product.github_repo, product.github_asset_template, token)
+            except github_releases.GitHubAccessError as exc:
+                github_releases.forget_token()  # ask gh again next time
+                error = str(exc)
+            except Exception as exc:  # noqa: BLE001 - surfaced in the status bar
+                error = f"Could not check GitHub releases ({exc})"
+            self.after(0, lambda: self._on_github_releases_checked(
+                releases, error, _catalog, _product_key))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_github_releases_checked(
+        self,
+        releases: list["github_releases.ReleaseInfo"],
+        error: str,
+        catalog: "CatalogStore",
+        product_key: str,
+    ) -> None:
+        self._stop_spinner()
+        # Re-enable whatever product is shown now (see _on_updates_checked).
+        self._check_updates_btn.configure(state="normal")
+        if error:
+            if product_key == self.current_product_key:
+                self._set_status(error)
+                self._show_toast("GitHub check failed — see status bar", 3500)
+            return
+
+        self._github_releases[product_key] = {r.version: r for r in releases}
+        github_releases.merge_releases(catalog, releases)
+        if product_key != self.current_product_key:
+            return
+
+        all_recs = catalog.all_versions()
+        owned = [r.version for r in all_recs if r.status == "installed"]
+        newest_owned = max(owned, key=_version_key) if owned else None
+        not_downloaded = sorted(
+            (r.version for r in all_recs if r.status == "available"), key=_version_key)
+        newer = [
+            v for v in not_downloaded
+            if newest_owned is None or _version_key(v) > _version_key(newest_owned)
+        ]
+
+        if newer:
+            self.selected_version = newer[-1]
+        self._refresh_list()
+
+        if newer:
+            newest = newer[-1]
+            if newest in self._version_order:
+                self._select_list_line(self._version_order.index(newest))
+                self._on_select_version(None)
+            self._set_status(f"New release on GitHub: {newest} — click Download to add it")
+            self._show_toast(f"{newest} available on GitHub")
+        elif not_downloaded:
+            self._set_status(
+                f"Up to date ({newest_owned}); older GitHub release(s) not downloaded: "
+                f"{', '.join(not_downloaded)}")
+            self._show_toast("You're up to date")
+        else:
+            self._set_status(
+                f"Up to date ({newest_owned}) — every GitHub release is in the library")
+            self._show_toast("You're up to date")
+
+    def _download_github_release(self, version: str) -> None:
+        product = self.product_def
+        _product_key = self.current_product_key
+        _paths = self.paths
+        key = (_product_key, version)
+        if key in self._github_downloads:
+            self._set_status(f"{version} is already downloading…")
+            return
+        self._github_downloads.add(key)
+        cached = self._github_releases.get(_product_key, {}).get(version)
+        self._set_status(f"Downloading {version} from GitHub…  (do not close)")
+
+        def _status(text: str) -> None:
+            if _product_key == self.current_product_key:
+                self._set_status(text)
+
+        def _worker() -> None:
+            try:
+                token = github_releases.get_token()
+                release = cached
+                if release is None:
+                    # Listed by an earlier session: look the release up again.
+                    found = github_releases.list_releases(
+                        product.github_repo, product.github_asset_template, token)
+                    release = next((r for r in found if r.version == version), None)
+                    if release is None:
+                        raise github_releases.GitHubAccessError(
+                            f"Release {version} is no longer on GitHub")
+
+                last_mb = [-1]
+
+                def _progress(done: int, total: int) -> None:
+                    mb = done // (1024 * 1024)
+                    if mb == last_mb[0]:
+                        return
+                    last_mb[0] = mb
+                    size = f" / {total // (1024 * 1024)} MB" if total else " MB"
+                    self.after(0, lambda: _status(
+                        f"Downloading {version}… {mb}{size}  (do not close)"))
+
+                github_releases.install_release(
+                    release, _paths.installs_dir, token,
+                    product_name=product.display_name,
+                    staging_parent=_paths.product_root,
+                    progress=_progress)
+                self.after(0, lambda: self._on_github_release_installed(version, _product_key))
+            except Exception as exc:  # noqa: BLE001 - surfaced to the user
+                if isinstance(exc, github_releases.GitHubAccessError):
+                    github_releases.forget_token()
+                self.after(0, lambda e=exc: self._on_github_download_failed(
+                    version, _product_key, e))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_github_release_installed(self, version: str, product_key: str) -> None:
+        self._github_downloads.discard((product_key, version))
+        if product_key != self.current_product_key:
+            return
+        self.selected_version = version
+        self._refresh_list()
+        if version in self._version_order:
+            self._select_list_line(self._version_order.index(version))
+            self._on_select_version(None)
+        self._set_status(f"Downloaded and verified {version} — ready to launch")
+        self._show_toast(f"Downloaded {version}")
+
+    def _on_github_download_failed(self, version: str, product_key: str, exc: Exception) -> None:
+        self._github_downloads.discard((product_key, version))
+        if isinstance(exc, github_releases.ChecksumError):
+            message = (f"{version} was downloaded but failed verification, "
+                       f"so it was not installed.\n\n{exc}")
+        elif isinstance(exc, FileExistsError):
+            message = f"{version} is already in the library."
+        else:
+            message = f"Could not download {version} from GitHub.\n\n{exc}"
+        if product_key == self.current_product_key:
+            self._refresh_list()
+            self._set_status("Download failed")
+        messagebox.showerror(APP_NAME, message)
 
     # ------------------------------------------------------------------ install/launch
     @staticmethod
