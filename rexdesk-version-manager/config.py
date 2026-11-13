@@ -71,7 +71,7 @@ PRODUCTS: dict[str, ProductDef] = {
         download_base_url="",
         local_builds=True,
         github_repo="MadeByDoru/rexdesk-rs",
-        github_asset_template="ReXdesk-Rust-{version}-portable.zip",
+        github_asset_template="ReXdesk-{version}-portable.zip|ReXdesk-Rust-{version}-portable.zip",
     ),
     # K-Cal rebuilt in Rust; versions published by kcal-rs/tools/publish-to-launcher.ps1.
     "kcalrust": ProductDef(

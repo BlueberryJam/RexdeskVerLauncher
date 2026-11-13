@@ -129,6 +129,16 @@ class ListReleasesTests(unittest.TestCase):
         self.assertEqual(unredirected.get("Authorization"), "Bearer tok")
         self.assertNotIn("Authorization", headers)
 
+    def test_accepts_the_renamed_zip_as_well_as_the_old_name(self):
+        both = "ReXdesk-{version}-portable.zip|ReXdesk-Rust-{version}-portable.zip"
+        new = raw_release("1.0.0.751", asset_id=10)
+        new["assets"][0]["name"] = "ReXdesk-1.0.0.751-portable.zip"
+        old = raw_release("1.0.0.721", asset_id=20)
+        self.assertEqual(gr.parse_release(new, both).zip_name, "ReXdesk-1.0.0.751-portable.zip")
+        self.assertEqual(gr.parse_release(old, both).zip_name, "ReXdesk-Rust-1.0.0.721-portable.zip")
+        self.assertIsNone(gr.parse_release(new, TEMPLATE), "the old template alone misses it")
+        self.assertEqual(config.PRODUCTS["rustrewrite"].github_asset_template, both)
+
     def test_follows_pagination(self):
         page2 = f"{API}/releases?per_page=100&page=2"
         fake = FakeGitHub({
@@ -409,7 +419,7 @@ class SyncLocalBuildsTests(unittest.TestCase):
 
     def test_products_wired_as_intended(self):
         self.assertEqual(config.PRODUCTS["rustrewrite"].github_repo, REPO)
-        self.assertEqual(config.PRODUCTS["rustrewrite"].github_asset_template, TEMPLATE)
+        self.assertIn(TEMPLATE, config.PRODUCTS["rustrewrite"].github_asset_template.split("|"))
         for key in ("kcalrust", "rexbridgerust", "rexdesk", "rexbridge", "kcal"):
             self.assertEqual(config.PRODUCTS[key].github_repo, "", key)
 

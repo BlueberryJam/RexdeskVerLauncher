@@ -184,8 +184,15 @@ def parse_release(raw: dict, asset_template: str) -> Optional[ReleaseInfo]:
         return None
     version = m.group(1)
     assets = {str(a.get("name")): a for a in raw.get("assets") or []}
-    zip_name = asset_template.format(version=version)
-    zip_asset = assets.get(zip_name)
+    # The template may list alternatives separated by "|" (the zip was renamed from
+    # ReXdesk-Rust-<v>-portable.zip to ReXdesk-<v>-portable.zip in 1.0.0.751).
+    zip_name = ""
+    zip_asset = None
+    for alternative in asset_template.split("|"):
+        name = alternative.strip().format(version=version)
+        if name in assets:
+            zip_name, zip_asset = name, assets[name]
+            break
     if not zip_asset:
         return None
     sums = assets.get(SUMS_ASSET)
